@@ -36,32 +36,6 @@ def search(query, top_k=5):
     conn.close()
     return results
 
-def answer_question(query, top_k=5):
-    results = search(query, top_k)
-
-    context = "\n\n".join(
-        f"[Company: {company} | Subject: {subject}]\n{content}"
-        for content, company, subject, url in results
-    )
-
-    system_prompt = (
-        "You are a regulatory analyst specializing in FDA compliance. "
-        "Answer the user's question using ONLY the provided context. "
-        "If the answer is not in the context, say you cannot find it. "
-        "Cite the company name for each claim you make."
-    )
-
-    user_prompt = f"Context:\n{context}\n\nQuestion: {query}"
-
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-    )
-    return response.choices[0].message.content
-
 if __name__ == "__main__":
     print("Ask questions about your documents. Type 'quit' to exit.")
     while True:
