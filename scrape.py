@@ -2,6 +2,7 @@ import time
 import requests
 import trafilatura
 import psycopg2
+import pymupdf
 
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
@@ -9,6 +10,33 @@ from ingest import chunk_text, embed_chunks
 
 BASE = "https://www.fda.gov/inspections-compliance-enforcement-and-criminal-investigations/compliance-actions-and-activities/warning-letters"
 HEADERS = {"User-Agent": "RegIntel research project (educational use)"}
+
+FDA_GUIDANCE_DOCS = [
+    {"url": "https://www.fda.gov/files/drugs/published/Process-Validation--General-Principles-and-Practices.pdf",
+     "title": "FDA Guidance - Process Validation: General Principles and Practices"},
+    {"url": "https://www.fda.gov/media/119267/download",
+     "title": "FDA Guidance - Data Integrity and Compliance With Drug CGMP: Q&A"},
+    {"url": "https://www.fda.gov/media/71026/download",
+     "title": "FDA Guidance - Sterile Drug Products Produced by Aseptic Processing (CGMP)"},
+    {"url": "https://www.fda.gov/media/90425/download",
+     "title": "FDA Guidance - CGMP for Phase 1 Investigational Drugs"},
+    {"url": "https://www.fda.gov/files/drugs/published/Q7-Good-Manufacturing-Practice-Guidance-for-Active-Pharmaceutical-Ingredients-Guidance-for-Industry.pdf",
+     "title": "FDA Guidance - Q7 GMP for Active Pharmaceutical Ingredients"},
+    {"url": "https://www.fda.gov/files/drugs/published/Analytical-Procedures-and-Methods-Validation-for-Drugs-and-Biologics.pdf",
+     "title": "FDA Guidance - Analytical Procedures and Methods Validation for Drugs and Biologics"},
+    {"url": "https://www.fda.gov/files/drugs/published/Bioanalytical-Method-Validation-Guidance-for-Industry.pdf",
+     "title": "FDA Guidance - Bioanalytical Method Validation"},
+    {"url": "https://www.fda.gov/media/158416/download",
+     "title": "FDA Guidance - Investigating Out-of-Specification (OOS) Test Results"},
+    {"url": "https://www.fda.gov/media/86193/download",
+     "title": "FDA Guidance - Contract Manufacturing Arrangements for Drugs: Quality Agreements"},
+    {"url": "https://www.fda.gov/media/161201/download",
+     "title": "FDA Guidance - Q2(R2) Validation of Analytical Procedures"},
+    {"url": "https://www.fda.gov/media/77391/download",
+     "title": "FDA Guidance - Pharmaceutical CGMPs for the 21st Century: A Risk-Based Approach"},
+    {"url": "https://www.fda.gov/downloads/Drugs/Guidances/UCM070337.pdf",
+     "title": "FDA Guidance - Quality Systems Approach to Pharmaceutical CGMP Regulations"},
+]
 
 def get_letters_on_page(page=0):
     url = f"{BASE}?page={page}"
@@ -137,6 +165,20 @@ def ingest_source(adapter, conn):
         except Exception as e:
             print("  error:", e)
 
+def ecfr_part_numbers(date, title="21"):
+    url = f"https://www.ecfr.gov/api/versioner/v1/structure/{date}/title-{title}.json"
+    resp = requests.get(url, headers=HEADERS, timeout=60)
+    resp.raise_for_status()
+
+    parts = []
+    def walk(node):
+        if node.get("type") == "part" and not node.get("reserved"):
+            parts.append(node["identifier"])
+        for child in node.get("children", []):
+            walk(child)
+    walk(resp.json())
+    return parts
+
 def ecfr_latest_date(title="21"):
     resp = requests.get("https://www.ecfr.gov/api/versioner/v1/titles.json",
                         headers=HEADERS, timeout=30)
@@ -146,16 +188,26 @@ def ecfr_latest_date(title="21"):
             return t["latest_issue_date"]
     raise ValueError(f"Title {title} not found")
 
-def ecfr_adapter(parts=("210", "211"), title="21", delay=1.0):
+def ecfr_adapter(parts=None, title="21", delay=0.5):
     date = ecfr_latest_date(title)
+    if parts is None:
+        parts = ecfr_part_numbers(date, title)
+        print(f"  Title {title}: {len(parts)} parts to ingest")
+
     for part in parts:
         api_url = (f"https://www.ecfr.gov/api/versioner/v1/full/"
                    f"{date}/title-{title}.xml?part={part}")
-        resp = requests.get(api_url, headers=HEADERS, timeout=60) # pulls the part's full text as XML
-        resp.raise_for_status()
+        try:
+            resp = requests.get(api_url, headers=HEADERS, timeout=60)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"  skipped part {part}: {e}")
+            continue
 
-        soup = BeautifulSoup(resp.text, "xml")        # parse as XML, not HTML
+        soup = BeautifulSoup(resp.text, "xml")
         text = soup.get_text(separator="\n", strip=True)
+        if not text:
+            continue   # skip empty parts
 
         yield {
             "text":     text,
@@ -168,8 +220,33 @@ def ecfr_adapter(parts=("210", "211"), title="21", delay=1.0):
         }
         time.sleep(delay)
 
+def fetch_pdf_text(url):
+    resp = requests.get(url, headers=HEADERS, timeout=60)
+    resp.raise_for_status()
+    doc = pymupdf.open(stream=resp.content, filetype="pdf")   # open from memory, not disk
+    text = "\n".join(doc[i].get_text() for i in range(doc.page_count))
+    doc.close()
+    return text
+
+def pdf_adapter(source, docs, delay=1.0):
+    for d in docs:
+        try:
+            text = fetch_pdf_text(d["url"])
+        except Exception as e:
+            print(f"  skipped {d['title']}: {e}")
+            continue
+        yield {
+            "text":     text,
+            "title":    d["title"],
+            "source":   source,
+            "doc_type": d.get("doc_type", "guidance"),
+            "subject":  "",
+            "date":     d.get("date", ""),
+            "url":      d["url"],
+        }
+        time.sleep(delay)
+
 if __name__ == "__main__":
     conn = psycopg2.connect(dbname="regintel")
-    ingest_source(fda_adapter(max_pages=1), conn)        # FDA letters
-    ingest_source(ecfr_adapter(parts=("210", "211")), conn)   # CGMP regulations
+    ingest_source(fda_adapter(max_pages=30), conn)
     conn.close()
