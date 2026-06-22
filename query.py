@@ -25,7 +25,8 @@ def search(query, top_k=5):
         """SELECT content,
                   COALESCE(company, source_file) AS company,
                   subject,
-                  url
+                  url,
+                  source
            FROM chunks
            ORDER BY embedding <=> %s::vector
            LIMIT %s""",

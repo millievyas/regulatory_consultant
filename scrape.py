@@ -137,7 +137,39 @@ def ingest_source(adapter, conn):
         except Exception as e:
             print("  error:", e)
 
+def ecfr_latest_date(title="21"):
+    resp = requests.get("https://www.ecfr.gov/api/versioner/v1/titles.json",
+                        headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    for t in resp.json()["titles"]:
+        if str(t["number"]) == str(title):
+            return t["latest_issue_date"]
+    raise ValueError(f"Title {title} not found")
+
+def ecfr_adapter(parts=("210", "211"), title="21", delay=1.0):
+    date = ecfr_latest_date(title)
+    for part in parts:
+        api_url = (f"https://www.ecfr.gov/api/versioner/v1/full/"
+                   f"{date}/title-{title}.xml?part={part}")
+        resp = requests.get(api_url, headers=HEADERS, timeout=60) # pulls the part's full text as XML
+        resp.raise_for_status()
+
+        soup = BeautifulSoup(resp.text, "xml")        # parse as XML, not HTML
+        text = soup.get_text(separator="\n", strip=True)
+
+        yield {
+            "text":     text,
+            "title":    f"{title} CFR Part {part}",
+            "source":   "eCFR",
+            "doc_type": "regulation",
+            "subject":  "",
+            "date":     date,
+            "url":      f"https://www.ecfr.gov/current/title-{title}/part-{part}",
+        }
+        time.sleep(delay)
+
 if __name__ == "__main__":
     conn = psycopg2.connect(dbname="regintel")
-    ingest_source(fda_adapter(max_pages=1), conn)
+    ingest_source(fda_adapter(max_pages=1), conn)        # FDA letters
+    ingest_source(ecfr_adapter(parts=("210", "211")), conn)   # CGMP regulations
     conn.close()

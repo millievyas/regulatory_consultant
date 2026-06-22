@@ -36,8 +36,8 @@ AGENTS = {
 def run_agent(agent_name, query, top_k=5):
     results = search(query, top_k)
     context = "\n\n".join(
-        f"[Company: {company} | Subject: {subject}]\n{content}"
-        for content, company, subject, url in results
+        f"[{source} | {company}]\n{content}"
+        for content, company, subject, url, source in results
     )
     response = client.chat.completions.create(
         model="gpt-4o-mini",
