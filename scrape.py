@@ -88,5 +88,56 @@ def ingest_recent_letters(max_pages=1, delay=1.0):
         time.sleep(delay)
     conn.close()
 
+def ingest_document(doc, conn):
+    text = doc.get("text")
+    if not text:
+        print("  skipped (no text extracted)")
+        return
+
+    chunks = chunk_text([(1, text)])
+    embeddings = embed_chunks(chunks)
+
+    cur = conn.cursor()
+    cur.execute("DELETE FROM chunks WHERE url = %s", (doc["url"],))   # idempotent
+
+    for (chunk, _page), embedding in zip(chunks, embeddings):
+        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
+        cur.execute(
+            """INSERT INTO chunks
+               (content, embedding, source_file, company, subject, issue_date, url, source, doc_type)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+            (chunk, embedding_str,
+             doc["title"], doc["title"],         # source_file + company both = title
+             doc.get("subject", ""), doc.get("date", ""),
+             doc["url"], doc["source"], doc.get("doc_type", ""))
+        )
+    conn.commit()
+    print(f"  stored {len(chunks)} chunks")
+
+def fda_adapter(max_pages=1, delay=1.0):
+    letters = get_letters(max_pages=max_pages, delay=delay)
+    for letter in letters:
+        text = fetch_letter_text(letter["url"])
+        yield {
+            "text":     text,
+            "title":    letter["company"],
+            "source":   "FDA",
+            "doc_type": "warning_letter",
+            "subject":  letter["subject"],
+            "date":     letter["issue_date"],
+            "url":      letter["url"],
+        }
+        time.sleep(delay)
+
+def ingest_source(adapter, conn):
+    for i, doc in enumerate(adapter, 1):
+        print(f"[{i}] {doc['source']}: {doc['title']}")
+        try:
+            ingest_document(doc, conn)
+        except Exception as e:
+            print("  error:", e)
+
 if __name__ == "__main__":
-    ingest_recent_letters(max_pages=1)   # ~10 letters
+    conn = psycopg2.connect(dbname="regintel")
+    ingest_source(fda_adapter(max_pages=1), conn)
+    conn.close()
