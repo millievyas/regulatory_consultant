@@ -3,13 +3,26 @@ import requests
 import trafilatura
 import psycopg2
 import pymupdf
+import socket
+import urllib3.util.connection as urllib3_cn
 
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from ingest import chunk_text, embed_chunks
 
+def _allowed_gai_family():
+    return socket.AF_INET   # force IPv4 only
+
+urllib3_cn.allowed_gai_family = _allowed_gai_family
+
 BASE = "https://www.fda.gov/inspections-compliance-enforcement-and-criminal-investigations/compliance-actions-and-activities/warning-letters"
-HEADERS = {"User-Agent": "RegIntel research project (educational use)"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "keep-alive",
+}
 
 FDA_GUIDANCE_DOCS = [
     {"url": "https://www.fda.gov/files/drugs/published/Process-Validation--General-Principles-and-Practices.pdf",
@@ -36,6 +49,34 @@ FDA_GUIDANCE_DOCS = [
      "title": "FDA Guidance - Pharmaceutical CGMPs for the 21st Century: A Risk-Based Approach"},
     {"url": "https://www.fda.gov/downloads/Drugs/Guidances/UCM070337.pdf",
      "title": "FDA Guidance - Quality Systems Approach to Pharmaceutical CGMP Regulations"},
+]
+
+EMA_DOCS = [
+    {"url": "https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-process-validation-finished-products-information-data-be-provided-regulatory-submissions_en.pdf",
+     "title": "EMA Guideline - Process Validation for Finished Products"},
+    {"url": "https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-process-validation-manufacture-biotechnology-derived-active-substances-and-data-be-provided-regulatory-submission_en.pdf",
+     "title": "EMA Guideline - Process Validation for Biotechnology-Derived Active Substances"},
+    {"url": "https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-manufacture-finished-dosage-form-revision-1_en.pdf",
+     "title": "EMA Guideline - Manufacture of the Finished Dosage Form (Rev 1)"},
+    {"url": "https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-sterilisation-medicinal-product-active-substance-excipient-and-primary-container_en.pdf",
+     "title": "EMA Guideline - Sterilisation of the Medicinal Product, Active Substance, Excipient and Primary Container"},
+    {"url": "https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-setting-health-based-exposure-limits-use-risk-identification-manufacture-different-medicinal-products-shared-facilities_en.pdf",
+     "title": "EMA Guideline - Setting Health-Based Exposure Limits (Shared Facilities / Cross-Contamination)"},
+    {"url": "https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-quality-water-pharmaceutical-use_en.pdf",
+     "title": "EMA Guideline - Quality of Water for Pharmaceutical Use"},
+    {"url": "https://www.ema.europa.eu/en/documents/scientific-guideline/guideline-stability-testing-stability-testing-existing-active-substances-and-related-finished-products_en.pdf",
+     "title": "EMA Guideline - Stability Testing of Existing Active Substances and Related Finished Products"},
+]
+
+UK_DOCS = [
+    {"url": "https://assets.publishing.service.gov.uk/media/5aa2b9ede5274a3e391e37f3/MHRA_GxP_data_integrity_guide_March_edited_Final.pdf",
+     "title": "MHRA - GxP Data Integrity Guidance and Definitions (Rev 1)"},
+    {"url": "https://assets.publishing.service.gov.uk/media/5b19553f40f0b634b1266c70/GMP_Compliance_Report_Guidelines_V_7.pdf",
+     "title": "MHRA - GMP Pre-Inspection Compliance Report Guidelines"},
+    {"url": "https://www.gov.uk/guidance/good-manufacturing-practice-and-good-distribution-practice",
+     "title": "MHRA - Good Manufacturing Practice and Good Distribution Practice"},
+    {"url": "https://www.gov.uk/guidance/decentralised-manufacture-uk-guideline-on-good-manufacturing-practice-gmp",
+     "title": "MHRA - Decentralised Manufacture: UK Guideline on GMP"},
 ]
 
 def get_letters_on_page(page=0):
@@ -246,7 +287,29 @@ def pdf_adapter(source, docs, delay=1.0):
         }
         time.sleep(delay)
 
+def fetch_html_text(url):
+    html = requests.get(url, headers=HEADERS, timeout=60).text
+    return trafilatura.extract(html)
+
+def web_adapter(source, docs, delay=1.0):
+    for d in docs:
+        url = d["url"]
+        try:
+            text = fetch_pdf_text(url) if url.lower().endswith(".pdf") else fetch_html_text(url)
+        except Exception as e:
+            print(f"  skipped {d['title']}: {e}")
+            continue
+        if not text:
+            print(f"  skipped {d['title']}: no text")
+            continue
+        yield {
+            "text": text, "title": d["title"], "source": source,
+            "doc_type": d.get("doc_type", "guidance"), "subject": "",
+            "date": d.get("date", ""), "url": url,
+        }
+        time.sleep(delay)
+
 if __name__ == "__main__":
     conn = psycopg2.connect(dbname="regintel")
-    ingest_source(fda_adapter(max_pages=30), conn)
+    ingest_source(web_adapter("TGA", AUSTRALIA_DOCS), conn)
     conn.close()

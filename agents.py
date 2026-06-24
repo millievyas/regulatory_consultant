@@ -33,6 +33,26 @@ AGENTS = {
     ),
 }
 
+SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "search_documents",
+        "description": "Search the regulatory knowledge base for relevant text. "
+                       "Call multiple times with different queries/filters if needed.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query":    {"type": "string", "description": "What to search for"},
+                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA"],
+                             "description": "Optional: restrict to one authority"},
+                "doc_type": {"type": "string", "enum": ["regulation", "guidance", "warning_letter"],
+                             "description": "Optional: restrict to one document type"},
+            },
+            "required": ["query"],
+        },
+    },
+}
+
 def run_agent(agent_name, query, top_k=5):
     results = search(query, top_k)
     context = "\n\n".join(
@@ -133,13 +153,44 @@ def coordinate(query):
           f"cost=${metrics['cost']:.5f}")
     return "\n\n".join(sections), metrics
 
+def execute_search(args):
+    results = search(args["query"], top_k=5,
+                     source=args.get("source"), doc_type=args.get("doc_type"))
+    if not results:
+        return "No matching documents found."
+    return "\n\n".join(
+        f"[{source} | {company}]\n{content}"
+        for content, company, subject, url, source in results
+    )
+
+def run_agent_tools(agent_name, query, max_steps=5):
+    messages = [
+        {"role": "system", "content": AGENTS[agent_name] +
+            " You have a search_documents tool. Search for evidence before answering; "
+            "you may search several times with different queries or source filters."},
+        {"role": "user", "content": query},
+    ]
+
+    for _ in range(max_steps):
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            tools=[SEARCH_TOOL],
+        )
+        msg = response.choices[0].message
+
+        if not msg.tool_calls:          # no tool call → it's the final answer
+            return msg.content
+
+        messages.append(msg)            # record the assistant's tool request
+        for tc in msg.tool_calls:       # run each requested search
+            args = json.loads(tc.function.arguments)
+            print(f"  [tool] search_documents({args})")
+            result = execute_search(args)
+            messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+
+    return "Stopped after max search steps."
+
 if __name__ == "__main__":
-    print("Multi-agent regulatory consultant. Type 'quit' to exit.")
-    while True:
-        query = input("\nQuestion: ")
-        if query.lower() in ("quit", "exit", "q"):
-            break
-        if not query.strip():
-            continue
-        text, _ = coordinate(query)      # unpack: text + metrics
-        print("\n" + text)
+    print(run_agent_tools("regulatory",
+        "Compare how FDA and EMA approach process validation."))
