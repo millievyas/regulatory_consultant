@@ -9,7 +9,7 @@ PRICE_IN  = 0.15 / 1_000_000   # gpt-4o-mini input tokens
 PRICE_OUT = 0.60 / 1_000_000   # gpt-4o-mini output tokens
 
 load_dotenv()
-client = OpenAI();
+client = OpenAI()
 
 # Each agent is just a name + a specialized system prompt
 AGENTS = {
@@ -52,27 +52,6 @@ SEARCH_TOOL = {
         },
     },
 }
-
-def run_agent(agent_name, query, top_k=5):
-    results = search(query, top_k)
-    context = "\n\n".join(
-        f"[{source} | {company}]\n{content}"
-        for content, company, subject, url, source in results
-    )
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": AGENTS[agent_name]},
-            {"role": "user", "content": f"Context:\n{context}\n\nQuestion: {query}"},
-        ],
-    )
-    u = response.usage
-    usage = {
-        "prompt_tokens":     u.prompt_tokens,
-        "completion_tokens": u.completion_tokens,
-        "cost": u.prompt_tokens * PRICE_IN + u.completion_tokens * PRICE_OUT,
-    }
-    return response.choices[0].message.content, usage
 
 def route_keyword(query):
     """Simple keyword-based routing. Returns a list of agent names to run."""
@@ -141,7 +120,7 @@ def coordinate(query):
     metrics = {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0, "agents": len(agents)}
     sections = []
     for name in agents:
-        answer, usage = run_agent(name, query)
+        answer, usage = run_agent_tools(name, query)
         metrics["prompt_tokens"]     += usage["prompt_tokens"]
         metrics["completion_tokens"] += usage["completion_tokens"]
         metrics["cost"]              += usage["cost"]
@@ -170,6 +149,7 @@ def run_agent_tools(agent_name, query, max_steps=5):
             "you may search several times with different queries or source filters."},
         {"role": "user", "content": query},
     ]
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0}
 
     for _ in range(max_steps):
         response = client.chat.completions.create(
@@ -177,20 +157,31 @@ def run_agent_tools(agent_name, query, max_steps=5):
             messages=messages,
             tools=[SEARCH_TOOL],
         )
+        u = response.usage
+        usage["prompt_tokens"]     += u.prompt_tokens
+        usage["completion_tokens"] += u.completion_tokens
+        usage["cost"]              += u.prompt_tokens * PRICE_IN + u.completion_tokens * PRICE_OUT
+
         msg = response.choices[0].message
+        if not msg.tool_calls:
+            return msg.content, usage
 
-        if not msg.tool_calls:          # no tool call → it's the final answer
-            return msg.content
-
-        messages.append(msg)            # record the assistant's tool request
-        for tc in msg.tool_calls:       # run each requested search
+        messages.append(msg)
+        for tc in msg.tool_calls:
             args = json.loads(tc.function.arguments)
             print(f"  [tool] search_documents({args})")
             result = execute_search(args)
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
-    return "Stopped after max search steps."
+    return "Stopped after max search steps.", usage
 
 if __name__ == "__main__":
-    print(run_agent_tools("regulatory",
-        "Compare how FDA and EMA approach process validation."))
+    print("Multi-agent regulatory consultant. Type 'quit' to exit.")
+    while True:
+        query = input("\nQuestion: ")
+        if query.lower() in ("quit", "exit", "q"):
+            break
+        if not query.strip():
+            continue
+        text, _ = coordinate(query)   # routes, runs tool-agents, aggregates
+        print("\n" + text)

@@ -48,18 +48,3 @@ def search(query, top_k=5, source=None, doc_type=None):
     cur.close()
     conn.close()
     return results
-
-if __name__ == "__main__":
-    print("Ask questions about your documents. Type 'quit' to exit.")
-    while True:
-        question = input("\nQuestion: ")
-
-        if question.lower() in ("quit", "exit", "q"):
-            print("Goodbye!")
-            break
-
-        if not question.strip():
-            continue
-
-        answer = answer_question(question)
-        print("\n" + answer)

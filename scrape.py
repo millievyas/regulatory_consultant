@@ -89,8 +89,8 @@ def get_letters_on_page(page=0):
     for row in soup.select("table tbody tr"):
         cells = row.find_all("td")
 
-        if len(cells) < 5: # skip malformed rows
-            continue;
+        if len(cells) < 5:  # skip malformed rows
+            continue
 
         link = cells[2].find("a") # company name is column 3
 
@@ -121,41 +121,6 @@ def fetch_letter_text(url):
     html = requests.get(url, headers=HEADERS, timeout=30).text
     text = trafilatura.extract(html)      # pulls out just the main content
     return text
-
-def ingest_letter(letter, conn):
-    text = fetch_letter_text(letter["url"])
-    if not text:
-        print("  skipped (no text extracted)")
-        return
-
-    chunks = chunk_text([(1, text)])     # reuse your chunker; the whole letter is one "page"
-    embeddings = embed_chunks(chunks)
-
-    cur = conn.cursor()
-    cur.execute("DELETE FROM chunks WHERE url = %s", (letter["url"],))   # avoid duplicates on re-run
-
-    for (chunk, _page), embedding in zip(chunks, embeddings):
-        embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
-        cur.execute(
-            """INSERT INTO chunks (content, embedding, source_file, company, subject, issue_date, url)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-            (chunk, embedding_str, letter["company"], letter["company"],
-             letter["subject"], letter["issue_date"], letter["url"])
-        )
-    conn.commit()
-    print(f"  stored {len(chunks)} chunks")
-
-def ingest_recent_letters(max_pages=1, delay=1.0):
-    letters = get_letters(max_pages=max_pages, delay=delay)
-    conn = psycopg2.connect(dbname="regintel")
-    for i, letter in enumerate(letters, 1):
-        print(f"[{i}/{len(letters)}] {letter['company']}")
-        try:
-            ingest_letter(letter, conn)
-        except Exception as e:
-            print("  error:", e)
-        time.sleep(delay)
-    conn.close()
 
 def ingest_document(doc, conn):
     text = doc.get("text")
@@ -310,6 +275,19 @@ def web_adapter(source, docs, delay=1.0):
         time.sleep(delay)
 
 if __name__ == "__main__":
+    # Full corpus refresh. Comment out any source you don't want to re-ingest.
+    # Ingestion is idempotent (rows are replaced by URL), so re-running is safe.
     conn = psycopg2.connect(dbname="regintel")
-    ingest_source(web_adapter("TGA", AUSTRALIA_DOCS), conn)
+
+    # US — FDA enforcement letters + guidance documents
+    ingest_source(fda_adapter(max_pages=30), conn)
+    ingest_source(pdf_adapter("FDA", FDA_GUIDANCE_DOCS), conn)
+
+    # US — eCFR regulations (full Title 21; large and slow — comment out to skip)
+    ingest_source(ecfr_adapter(), conn)
+
+    # EU + UK guidance
+    ingest_source(pdf_adapter("EMA", EMA_DOCS), conn)
+    ingest_source(web_adapter("MHRA", UK_DOCS), conn)
+
     conn.close()
