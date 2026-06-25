@@ -1,8 +1,10 @@
+import time
+import json
+
 from query import search
 from openai import OpenAI
 from dotenv import load_dotenv
-import time
-import json
+from concurrent.futures import ThreadPoolExecutor
 
 # OpenAI pricing per token — VERIFY current rates at openai.com/pricing
 PRICE_IN  = 0.15 / 1_000_000   # gpt-4o-mini input tokens
@@ -118,12 +120,20 @@ def route(query, history=None):
 def coordinate(query, history=None):
     history = history or []
     start = time.perf_counter()
-    agents = route(query)
+    agents = route(query, history)
+
+    # Run the routed agents concurrently. They're independent and I/O-bound
+    # (waiting on the API + DB), so threads overlap those waits instead of
+    # running the agents back-to-back.
+    with ThreadPoolExecutor(max_workers=len(agents)) as pool:
+        outputs = list(pool.map(
+            lambda name: (name, run_agent_tools(name, query, history)),
+            agents
+        ))
 
     metrics = {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0, "agents": len(agents)}
     sections = []
-    for name in agents:
-        answer, usage = run_agent_tools(name, query, history)
+    for name, (answer, usage) in outputs:
         metrics["prompt_tokens"]     += usage["prompt_tokens"]
         metrics["completion_tokens"] += usage["completion_tokens"]
         metrics["cost"]              += usage["cost"]
