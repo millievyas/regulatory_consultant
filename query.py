@@ -48,3 +48,36 @@ def search(query, top_k=5, source=None, doc_type=None):
     cur.close()
     conn.close()
     return results
+
+def list_documents(source=None, doc_type=None, limit=100):
+    conditions, params = [], []
+    if source:
+        conditions.append("source = %s"); params.append(source)
+    if doc_type:
+        conditions.append("doc_type = %s"); params.append(doc_type)
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    params.append(limit)
+
+    conn = psycopg2.connect(dbname="regintel")
+    cur = conn.cursor()
+    cur.execute(f"""
+        SELECT DISTINCT COALESCE(company, source_file) AS title, source, doc_type
+        FROM chunks {where}
+        ORDER BY source, title
+        LIMIT %s
+    """, params)
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return rows
+
+def fetch_document(title, max_chars=12000):
+    conn = psycopg2.connect(dbname="regintel")
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT content FROM chunks
+        WHERE COALESCE(company, source_file) = %s
+        ORDER BY id
+    """, (title,))
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    return "\n".join(r[0] for r in rows)[:max_chars]
