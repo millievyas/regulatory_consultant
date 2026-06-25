@@ -77,7 +77,7 @@ def route_keyword(query):
 
     return selected
 
-def route(query):
+def route(query, history=None):
     system_prompt = (
         "You are a router for a regulatory analysis system. Decide which "
         "specialist agents should answer the user's question.\n\n"
@@ -93,12 +93,14 @@ def route(query):
         "relevant; prefer the smallest correct set."
     )
 
+    messages = [{"role": "system", "content": system_prompt}]
+    if history:
+        messages += history
+    messages.append({"role": "user", "content": query})
+
     response = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": query},
-        ],
+        messages=messages,
         temperature=0,
     )
     raw = response.choices[0].message.content.strip()
@@ -113,14 +115,15 @@ def route(query):
         selected = ["regulatory"]
     return selected
 
-def coordinate(query):
+def coordinate(query, history=None):
+    history = history or []
     start = time.perf_counter()
     agents = route(query)
 
     metrics = {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0, "agents": len(agents)}
     sections = []
     for name in agents:
-        answer, usage = run_agent_tools(name, query)
+        answer, usage = run_agent_tools(name, query, history)
         metrics["prompt_tokens"]     += usage["prompt_tokens"]
         metrics["completion_tokens"] += usage["completion_tokens"]
         metrics["cost"]              += usage["cost"]
@@ -142,13 +145,17 @@ def execute_search(args):
         for content, company, subject, url, source in results
     )
 
-def run_agent_tools(agent_name, query, max_steps=5):
+def run_agent_tools(agent_name, query, history=None, max_steps=5):
     messages = [
         {"role": "system", "content": AGENTS[agent_name] +
             " You have a search_documents tool. Search for evidence before answering; "
             "you may search several times with different queries or source filters."},
-        {"role": "user", "content": query},
     ]
+
+    if history:
+        messages += history
+    messages.append({"role": "user", "content": query})
+
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "cost": 0.0}
 
     for _ in range(max_steps):
@@ -177,11 +184,17 @@ def run_agent_tools(agent_name, query, max_steps=5):
 
 if __name__ == "__main__":
     print("Multi-agent regulatory consultant. Type 'quit' to exit.")
+    history = []
     while True:
         query = input("\nQuestion: ")
         if query.lower() in ("quit", "exit", "q"):
             break
         if not query.strip():
             continue
-        text, _ = coordinate(query)   # routes, runs tool-agents, aggregates
+
+        text, _ = coordinate(query, history)
         print("\n" + text)
+
+        history.append({"role": "user", "content": query})
+        history.append({"role": "assistant", "content": text})
+        history = history[-6:]   # keep the last 3 turns
