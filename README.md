@@ -42,29 +42,44 @@ cross-jurisdiction coverage for EU/UK.
 
 ## Results
 
-Measured on a hand-labeled 30-question routing benchmark and a 10-query performance
-sample (OpenAI `gpt-4o-mini` + `text-embedding-3-small`).
+Evaluated with three independent harnesses (OpenAI `gpt-4o-mini` as generator/router,
+`gpt-4o` as the grounding judge).
 
-**Coordinator: keyword vs. LLM routing**
+**Routing — keyword vs. LLM coordinator** (75-question benchmark, same test for both)
 
-| Metric | Keyword router | LLM router | Change |
-| --- | --- | --- | --- |
-| Routing accuracy | 73% | **93%** | +20 pts |
-| Agents fired / query | 1.30 | 1.10 | −15% |
-| Cost / query | $0.00039 | $0.00033 | −15% |
+| Router | Accuracy |
+| --- | --- |
+| Keyword baseline | 66.7% |
+| LLM coordinator | **88.0%** (+21 pts) |
 
-Replacing keyword routing with an LLM coordinator improved accuracy **and** lowered
-cost, because the smarter router stopped firing redundant agents.
+The LLM router's biggest gains were on semantically-phrased questions keyword matching
+missed (quality category 30% → 100%). Remaining errors concentrate at the
+manufacturing/quality domain boundary — largely defensible overlaps. A targeted router
+refinement was tested and reverted after it regressed overall accuracy.
 
-**Agents: fixed retrieval vs. tool use**
+**Retrieval accuracy** (22 questions, unfiltered search over the whole corpus)
 
-| Metric | Fixed pipeline | Tool-using agents |
-| --- | --- | --- |
-| Latency / query | ~5.3s | ~22s |
-| Cost / query | $0.00033 | $0.0014 |
+| Metric | Result |
+| --- | --- |
+| Source hit@5 | **100%** |
+| Source hit@3 | 95% |
+| Source hit@1 | 73% |
 
-Tool use buys multi-step, filter-aware reasoning (e.g. searching FDA and EMA
-separately to compare them) at a real latency/cost premium — a deliberate tradeoff.
+The correct authority's evidence reaches the top-5 every time, despite a ~10:1 corpus
+imbalance toward regulations.
+
+**Grounding** (12 questions incl. negative controls, judged by `gpt-4o`)
+
+100% of answers fully supported by retrieved context, 0 hallucinations — every
+negative-control question (revenues, fines, headcount) correctly refused.
+
+**Performance**
+
+- The LLM coordinator also cut cost ~15% vs. keyword routing by firing fewer redundant agents.
+- Running routed agents **concurrently** reduced multi-agent query latency **55%**
+  (24.2s → 11.0s, ~2.2× speedup) at no extra token cost.
+- Tool-using agents trade higher latency/cost for multi-step, filter-aware reasoning
+  (e.g. searching FDA and EMA separately to compare them) — a deliberate tradeoff.
 
 ---
 
@@ -121,8 +136,10 @@ layers are completely source-agnostic. Adding a source = writing one adapter.
 | `scrape.py` | Ingestion: source adapters (FDA, eCFR, PDF, web), normalization, and storage. |
 | `ingest.py` | Shared helpers: `chunk_text`, `embed_chunks`. |
 | `query.py` | Retrieval: `embed_query` and `search` (filtered top-K over pgvector). |
-| `agents.py` | Specialist agents, the LLM coordinator (`route`), the `search_documents` tool, and the tool-using agent loop. |
-| `eval_routing.py` | Routing-accuracy benchmark (30 labeled questions). |
+| `agents.py` | Specialist agents, the LLM coordinator (`route`), the tool suite (`search_documents`, `list_documents`, `fetch_document`), the tool-using agent loop, conversation memory, and concurrent agent execution. |
+| `eval_routing.py` | Routing-accuracy benchmark (75 questions; keyword vs. LLM). |
+| `eval_retrieval.py` | Retrieval-accuracy benchmark (source hit@k). |
+| `eval_grounding.py` | Grounding / hallucination benchmark (LLM-as-judge). |
 | `eval_perf.py` | Latency / token / cost benchmark over a batch of queries. |
 | `test.py` | Quick smoke test for DB connectivity + search. |
 
@@ -188,7 +205,9 @@ python agents.py
 Run the benchmarks:
 
 ```bash
-python eval_routing.py     # routing accuracy
+python eval_routing.py     # routing accuracy (keyword vs. LLM)
+python eval_retrieval.py   # retrieval accuracy (source hit@k)
+python eval_grounding.py   # grounding / hallucination (LLM-as-judge)
 python eval_perf.py        # latency / tokens / cost
 ```
 
@@ -196,20 +215,25 @@ python eval_perf.py        # latency / tokens / cost
 
 ## Roadmap
 
-- **Memory** — conversation history for follow-up questions; per-project investigation state.
-- **More tools** — `summarize_doc`, section-level citations.
+Done: multi-authority ingestion, LLM coordinator, tool-using agents (search / list /
+fetch), conversation memory, concurrent agent execution, and a three-axis eval suite
+(routing, retrieval, grounding).
+
+Next:
+
+- **UI** — a web front end over the coordinator.
 - **More authorities** — additional ICH markets (some sites need a browser-grade fetcher
   such as `curl_cffi` to get past CDN bot protection).
-- **Evaluation** — expand the benchmark to ~100 questions; add retrieval and citation metrics.
-- **Performance** — run routed agents concurrently to cut multi-agent latency.
+- **Per-project memory** — persistent investigation state across sessions.
+- **Section-level citations** — cite the specific regulation/section, not the whole document.
 - **Deployment** — S3 for originals, RDS (pgvector), ECS; swap OpenAI for AWS Bedrock.
 
 ---
 
 ## Notes / limitations
 
-- Benchmarks are small (30 routing questions, 10 perf queries) — directional for a
-  portfolio project, not production-grade statistics.
+- Benchmarks are modest in size (75 routing, 22 retrieval, 12 grounding) — directional
+  for a portfolio project, not production-grade statistics.
 - Routing ground-truth labels reflect a self-defined scope for each agent's domain.
 - Scrapers depend on each site's current structure and may need maintenance.
 - Some authority sites (e.g. Health Canada, TGA) block plain `requests` via CDN
