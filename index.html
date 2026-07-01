@@ -7,6 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
 :root{--radius:11px;--radius-sm:8px;--font:'Inter',system-ui,-apple-system,sans-serif;--mono:'JetBrains Mono',monospace;}
 [data-theme="light"]{
@@ -146,14 +147,49 @@ td .pname{color:var(--text);font-weight:600}.cellrow{display:flex;align-items:ce
 .hide{display:none!important}
 @media(max-width:1100px){.kpis{grid-template-columns:repeat(2,1fr)}.cols-2{grid-template-columns:1fr}.cardgrid{grid-template-columns:repeat(2,1fr)}.suggest{grid-template-columns:1fr}.evalgrid{grid-template-columns:1fr}}
 ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--border);border-radius:10px}
+.authgate{position:fixed;inset:0;z-index:200;background:var(--bg);display:grid;place-items:center}
+.authcard{width:380px;max-width:90vw;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-lg);padding:30px 30px 26px}
+.authcard .lg{width:46px;height:46px;border-radius:12px;background:linear-gradient(135deg,#3b82f6,#1d4ed8);display:grid;place-items:center;color:#fff;font-weight:700;font-size:20px;margin:0 auto 16px}
+.authcard h2{text-align:center;margin:0 0 4px;font-size:19px}
+.authcard .as{text-align:center;color:var(--text-2);font-size:13px;margin-bottom:20px}
+.authcard label{font-size:12px;font-weight:600;color:var(--text-2);display:block;margin:12px 0 6px}
+.authcard input{width:100%;height:40px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);padding:0 12px;color:var(--text);font-family:inherit;font-size:14px;outline:none}
+.authcard input:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-soft)}
+.authcard .ab{width:100%;height:42px;margin-top:20px;border:none;border-radius:var(--radius-sm);background:var(--blue);color:#fff;font-weight:600;font-size:14px;cursor:pointer}
+.authcard .ab:disabled{opacity:.6}
+.authcard .alt{text-align:center;margin-top:14px;font-size:13px;color:var(--text-2)}.authcard .alt a{color:var(--blue);font-weight:600;cursor:pointer}
+.autherr{color:var(--red);font-size:12.5px;text-align:center;margin-top:10px;min-height:15px}
+.empty-page{text-align:center;color:var(--muted);padding:70px 20px}.empty-page h3{color:var(--text);font-size:18px;margin:0 0 6px}
+.modal-ov{position:fixed;inset:0;z-index:150;background:rgba(15,23,42,.55);display:grid;place-items:center;padding:20px}
+.modal{width:480px;max-width:100%;background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow-lg);overflow:hidden}
+.modal-h{display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--border-2)}.modal-h h3{margin:0;font-size:16px}
+.xbtn{background:transparent;border:none;color:var(--muted);font-size:15px;cursor:pointer}
+.modal-b{padding:18px 22px}.modal-b label{font-size:12px;font-weight:600;color:var(--text-2);display:block;margin:12px 0 6px}.modal-b label:first-child{margin-top:0}
+.modal-b input{width:100%;height:38px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg);padding:0 12px;color:var(--text);font-family:inherit;font-size:14px;outline:none}
+.modal-b input:focus{border-color:var(--blue);box-shadow:0 0 0 3px var(--blue-soft)}
+.frow{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.modal-f{display:flex;justify-content:flex-end;gap:10px;padding:16px 22px;border-top:1px solid var(--border-2)}
 </style>
 </head>
 <body>
 
+<div class="authgate" id="authGate">
+  <div class="authcard">
+    <div class="lg">R</div>
+    <h2 id="authTitle">Sign in to R Path AI</h2>
+    <div class="as">Regulatory intelligence workspace</div>
+    <label>Email</label><input id="authEmail" type="email" autocomplete="email" placeholder="you@firm.com"/>
+    <label>Password</label><input id="authPass" type="password" autocomplete="current-password" placeholder="••••••••"/>
+    <button class="ab" id="authBtn">Sign in</button>
+    <div class="autherr" id="authErr"></div>
+    <div class="alt" id="authAlt">No account? <a id="authToggle">Create one</a></div>
+  </div>
+</div>
+
 <aside class="sidebar" id="sidebar">
   <div class="side-top"><div class="logo">R</div><div class="logo-text">R Path AI<small>Regulatory Intelligence</small></div></div>
   <nav class="nav" id="nav"></nav>
-  <div class="uprofile"><div class="avatar">MV</div><div class="uinfo"><div class="un">Millie Vyas</div><div class="ur">millievyas@gmail.com</div></div></div>
+  <div class="uprofile"><div class="avatar" id="uAvatar">U</div><div class="uinfo" style="flex:1;min-width:0"><div class="un" id="uName">—</div><div class="ur" id="uEmail" style="overflow:hidden;text-overflow:ellipsis"></div></div><button id="signout" title="Sign out" style="background:transparent;border:1px solid #1e293b;color:#64748b;width:30px;height:30px;border-radius:8px;display:grid;place-items:center;flex-shrink:0"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg></button></div>
 </aside>
 
 <div class="main">
@@ -185,12 +221,16 @@ const I={
  shield:'<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
  check:'<path d="M20 6L9 17l-5-5"/>',beaker:'<path d="M9 3h6M10 3v6l-5 9a2 2 0 002 3h10a2 2 0 002-3l-5-9V3"/>',
  search:'<circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/>',ext:'<path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><path d="M15 3h6v6M10 14L21 3"/>',
- list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>'
+ list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+ projects:'<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>',
+ plus:'<path d="M12 5v14M5 12h14"/>',
+ trash:'<path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>'
 };
 function icon(n,c=''){return `<svg class="${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[n]||''}</svg>`}
 
 const NAV=[
  {id:'dashboard',label:'Dashboard',icon:'dashboard'},
+ {id:'projects',label:'Projects',icon:'projects'},
  {id:'consult',label:'Consultations',icon:'consult'},
  {id:'documents',label:'Documents',icon:'documents'},
  {id:'kb',label:'Knowledge Base',icon:'kb'},
@@ -198,8 +238,8 @@ const NAV=[
  {id:'settings',label:'Settings',icon:'settings'},
 ];
 document.getElementById('nav').innerHTML=
- `<div class="side-section">Workspace</div>`+NAV.slice(0,5).map(navItem).join('')+
- `<div class="side-section">System</div>`+NAV.slice(5).map(navItem).join('');
+ `<div class="side-section">Workspace</div>`+NAV.slice(0,6).map(navItem).join('')+
+ `<div class="side-section">System</div>`+NAV.slice(6).map(navItem).join('');
 function navItem(n){return `<a class="nav-item" data-route="${n.id}">${icon(n.icon)}<span class="nav-label">${n.label}</span></a>`}
 
 const root=document.documentElement;
@@ -213,11 +253,13 @@ const AG={FDA:{c:'#2563eb',r:'US'},eCFR:{c:'#7c3aed',r:'US'},EMA:{c:'#0891b2',r:
 const acol=s=>AG[s]?.c||'#64748b';
 
 /* real data state */
-let OV=null, DOCS=null, loadErr=false;
+let OV=null, DOCS=null, ME=null, loadErr=false;
+function timeAgo(ts){const d=(Date.now()-new Date(ts))/1000;if(d<60)return 'just now';if(d<3600)return Math.floor(d/60)+'m ago';if(d<86400)return Math.floor(d/3600)+'h ago';return Math.floor(d/86400)+'d ago';}
 async function loadData(){
   try{
     OV=await (await fetch('/overview')).json();
     DOCS=(await (await fetch('/documents')).json()).documents;
+    ME=await (await api('/me/overview')).json();
     setLive(true);
   }catch(e){loadErr=true;setLive(false)}
   render();
@@ -350,13 +392,15 @@ function pageConsult(){
 
 function skeletonGrid(){return `<div class="grid kpis" style="margin-bottom:18px">${Array(4).fill('<div class="card kpi"><div class="skel" style="height:64px"></div></div>').join('')}</div><div class="card skel" style="height:240px"></div>`}
 
-const PAGES={dashboard:pageDashboard,consult:pageConsult,documents:pageDocuments,kb:pageKB,agents:pageAgents,settings:pageSettings};
+const PAGES={dashboard:pageDashboard,projects:pageProjects,consult:pageConsult,documents:pageDocuments,kb:pageKB,agents:pageAgents,settings:pageSettings};
 let currentRoute='dashboard';
 function render(){
-  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.route===currentRoute));
-  document.getElementById('topTitle').textContent=(NAV.find(n=>n.id===currentRoute)||{}).label||'';
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.route===currentRoute||(currentRoute==='workspace'&&n.dataset.route==='projects')));
+  if(currentRoute!=='workspace')document.getElementById('topTitle').textContent=(NAV.find(n=>n.id===currentRoute)||{}).label||'';
+  if(currentRoute==='workspace'){document.getElementById('page').innerHTML=pageWorkspace();loadWorkspace();return;}
   document.getElementById('page').innerHTML=(PAGES[currentRoute]||pageDashboard)();
   if(currentRoute==='consult')wireConsult();
+  if(currentRoute==='projects')loadProjects();
   if(currentRoute==='documents'&&DOCS){renderDocRows();['fSource','fType','fSearch'].forEach(id=>document.getElementById(id).addEventListener('input',renderDocRows));}
 }
 document.getElementById('nav').addEventListener('click',e=>{const a=e.target.closest('.nav-item');if(a){currentRoute=a.dataset.route;render();document.getElementById('page').scrollTop=0;}});
@@ -379,7 +423,7 @@ async function runConsult(q){
   wf.insertAdjacentHTML('beforeend',`<div class="wf-q">${esc(q)}</div>`);
   const sid='st'+Date.now();wf.insertAdjacentHTML('beforeend',stepsHtml(sid));scrollPage();
   try{
-    const data=await (await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,history:cHistory})})).json();
+    const data=await (await api('/ask',{method:'POST',body:JSON.stringify({question:q,history:cHistory})})).json();
     document.getElementById(sid).remove();renderAgents(wf,data.answer||'');renderReport(wf,data);
     cHistory.push({role:'user',content:q});cHistory.push({role:'assistant',content:data.answer||''});cHistory=cHistory.slice(-6);
   }catch(e){const s=document.getElementById(sid);if(s)s.innerHTML='<div class="step" style="color:var(--red)">Error contacting the server.</div>'}
@@ -408,7 +452,126 @@ function renderReport(wf,data){const m=data.metrics||{};const el=document.create
     <span class="pill green" style="margin-left:auto"><span class="pdot"></span>Grounded · cited</span></div>`;wf.appendChild(el)}
 function scrollPage(){const p=document.getElementById('page');p.scrollTop=p.scrollHeight}
 
-render();loadData();
+/* ---------- projects + workspace ---------- */
+let PROJECTS=null,currentProjectId=null,currentProjectObj=null;
+function hashColor(s){const cs=['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#db2777'];let h=0;for(const c of (s||'')) h=c.charCodeAt(0)+((h<<5)-h);return cs[Math.abs(h)%cs.length]}
+function gv(id){return document.getElementById(id).value.trim()}
+
+function pageProjects(){
+  return `<div class="crumbs"><b>Home</b> / Projects</div>
+  <div class="page-head"><div><h1>Projects</h1><div class="sub">Your client engagements and their saved consultations.</div></div>
+    <button class="btn primary" onclick="openProjectModal()">${icon('plus')} New Project</button></div>
+  <div id="projGrid"><div class="card skel" style="height:120px"></div></div>`;
+}
+async function loadProjects(){
+  try{PROJECTS=(await (await api('/projects')).json()).projects}catch(e){PROJECTS=[]}
+  const g=document.getElementById('projGrid');if(!g)return;
+  if(!PROJECTS.length){g.innerHTML=`<div class="empty-page"><h3>No projects yet</h3><p>Create your first engagement to organize consultations.</p></div>`;return}
+  g.className='cardgrid';g.removeAttribute('style');
+  g.innerHTML=PROJECTS.map(p=>`<div class="card agency" style="cursor:pointer" onclick="openWorkspace(${p.id})">
+    <div class="flag" style="background:${hashColor(p.name)}">${(p.name[0]||'P').toUpperCase()}</div>
+    <div class="an">${esc(p.name)}</div><div class="ad">${esc(p.client||'No client')}${p.region?' · '+esc(p.region):''}</div>
+    <div class="arow"><div><div class="n">${p.consultations||0}</div><div class="l">CONSULTATIONS</div></div>
+      <div style="text-align:right"><div class="l">${new Date(p.created_at).toLocaleDateString()}</div></div></div></div>`).join('');
+}
+function openProjectModal(){
+  const m=document.createElement('div');m.className='modal-ov';m.id='projModal';
+  m.innerHTML=`<div class="modal"><div class="modal-h"><h3>New Project</h3><button class="xbtn" onclick="closeModal()">✕</button></div>
+    <div class="modal-b">
+      <label>Project name *</label><input id="pName" placeholder="e.g. Zentara BLA Submission"/>
+      <label>Client</label><input id="pClient" placeholder="e.g. Zentara Biologics"/>
+      <div class="frow"><div><label>Region</label><input id="pRegion" placeholder="US / EU / UK"/></div>
+        <div><label>Drug type</label><input id="pDrug" placeholder="Biologic, small molecule…"/></div></div>
+      <div class="frow"><div><label>Submission type</label><input id="pSub" placeholder="BLA, NDA, MAA…"/></div>
+        <div><label>Agencies</label><input id="pAg" placeholder="FDA, EMA"/></div></div>
+      <div class="autherr" id="pErr"></div></div>
+    <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="pCreate">Create Project</button></div></div>`;
+  document.body.appendChild(m);document.getElementById('pCreate').onclick=createProject;document.getElementById('pName').focus();
+}
+function closeModal(){const m=document.getElementById('projModal');if(m)m.remove()}
+async function createProject(){
+  const name=gv('pName');if(!name){document.getElementById('pErr').textContent='Project name is required.';return}
+  const body={name,client:gv('pClient'),region:gv('pRegion'),drug_type:gv('pDrug'),submission_type:gv('pSub'),agencies:gv('pAg')};
+  const btn=document.getElementById('pCreate');btn.disabled=true;
+  const res=await api('/projects',{method:'POST',body:JSON.stringify(body)});btn.disabled=false;
+  if(!res.ok){document.getElementById('pErr').textContent='Could not create project.';return}
+  closeModal();loadProjects();
+}
+function openWorkspace(id){currentProjectId=id;currentRoute='workspace';render();document.getElementById('page').scrollTop=0;}
+function pageWorkspace(){return `<div id="wsRoot"><div class="card skel" style="height:90px;margin-bottom:18px"></div><div class="card skel" style="height:220px"></div></div>`;}
+async function loadWorkspace(){
+  let proj,cons;
+  try{proj=await (await api('/projects/'+currentProjectId)).json();
+      cons=(await (await api('/consultations?project_id='+currentProjectId)).json()).consultations;}
+  catch(e){const r=document.getElementById('wsRoot');if(r)r.innerHTML='<div class="empty-page"><h3>Could not load project</h3></div>';return}
+  currentProjectObj=proj;document.getElementById('topTitle').textContent=proj.name;
+  const meta=[['Client',proj.client],['Region',proj.region],['Drug Type',proj.drug_type],['Submission',proj.submission_type],['Agencies',proj.agencies]].filter(m=>m[1]);
+  const root=document.getElementById('wsRoot');if(!root)return;
+  root.innerHTML=`
+    <div class="crumbs"><b>Home</b> / <a onclick="currentRoute='projects';render()" style="cursor:pointer;color:var(--blue)">Projects</a> / ${esc(proj.name)}</div>
+    <div class="page-head"><div><h1>${esc(proj.name)}</h1><div class="sub">${proj.client?esc(proj.client):'No client'}</div></div>
+      <button class="btn" onclick="deleteProject(${proj.id})">${icon('trash')} Delete</button></div>
+    ${meta.length?`<div class="card" style="margin-bottom:18px"><div style="display:flex;flex-wrap:wrap;gap:26px;padding:16px 20px">
+      ${meta.map(m=>`<div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">${m[0]}</div><div style="font-weight:600;margin-top:3px">${esc(m[1])}</div></div>`).join('')}</div></div>`:''}
+    <div class="promptbox" style="margin-bottom:20px"><textarea id="wsInput" rows="1" placeholder="Ask a question for this project…"></textarea><button class="send" id="wsSend">↑</button></div>
+    <div class="workflow" id="wsWf"></div>`;
+  const wf=document.getElementById('wsWf');
+  cons.slice().reverse().forEach(c=>renderSaved(wf,c));
+  const input=document.getElementById('wsInput'),send=document.getElementById('wsSend');
+  const grow=()=>{input.style.height='auto';input.style.height=Math.min(input.scrollHeight,200)+'px'};
+  input.addEventListener('input',grow);
+  input.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();wsGo()}});
+  const wsGo=()=>{const q=input.value.trim();if(q){input.value='';grow();askInProject(q)}};
+  send.onclick=wsGo;scrollPage();
+}
+function renderSaved(wf,c){wf.insertAdjacentHTML('beforeend',`<div class="wf-q">${esc(c.question)}</div>`);renderAgents(wf,c.answer||'');if(c.metrics)renderReport(wf,{metrics:c.metrics});}
+async function askInProject(q){
+  const wf=document.getElementById('wsWf');wf.insertAdjacentHTML('beforeend',`<div class="wf-q">${esc(q)}</div>`);
+  const sid='st'+Date.now();wf.insertAdjacentHTML('beforeend',stepsHtml(sid));scrollPage();
+  try{const data=await (await api('/ask',{method:'POST',body:JSON.stringify({question:q,history:[],project_id:currentProjectId})})).json();
+    document.getElementById(sid).remove();renderAgents(wf,data.answer||'');renderReport(wf,data);}
+  catch(e){const s=document.getElementById(sid);if(s)s.innerHTML='<div class="step" style="color:var(--red)">Error contacting the server.</div>'}
+  scrollPage();
+}
+async function deleteProject(id){if(!confirm('Delete this project and all its consultations?'))return;await api('/projects/'+id,{method:'DELETE'});currentRoute='projects';render();}
+
+let supa=null,authToken=null,authMode='login';
+async function api(path,opts={}){opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});if(authToken)opts.headers['Authorization']='Bearer '+authToken;return fetch(path,opts);}
+function showAuth(){document.getElementById('authGate').classList.remove('hide')}
+function onLogin(session){
+  authToken=session.access_token;const email=(session.user&&session.user.email)||'';
+  document.getElementById('uEmail').textContent=email;
+  document.getElementById('uName').textContent=email.split('@')[0]||'Account';
+  document.getElementById('uAvatar').textContent=(email[0]||'U').toUpperCase();
+  document.getElementById('authGate').classList.add('hide');
+  render();loadData();
+}
+function toggleMode(){authMode=authMode==='login'?'signup':'login';const lg=authMode==='login';
+  document.getElementById('authTitle').textContent=lg?'Sign in to R Path AI':'Create your account';
+  document.getElementById('authBtn').textContent=lg?'Sign in':'Create account';
+  document.getElementById('authAlt').innerHTML=lg?'No account? <a id="authToggle">Create one</a>':'Have an account? <a id="authToggle">Sign in</a>';
+  document.getElementById('authToggle').onclick=toggleMode;}
+async function doAuth(){
+  const email=document.getElementById('authEmail').value.trim(),pass=document.getElementById('authPass').value;
+  const err=document.getElementById('authErr');err.textContent='';
+  if(!email||!pass){err.textContent='Enter your email and password.';return}
+  const btn=document.getElementById('authBtn');btn.disabled=true;
+  const res=authMode==='login'?await supa.auth.signInWithPassword({email,password:pass}):await supa.auth.signUp({email,password:pass});
+  btn.disabled=false;
+  if(res.error){err.textContent=res.error.message;return}
+  if(res.data.session)onLogin(res.data.session);else err.textContent='Account created — check your email to confirm, then sign in.';
+}
+async function boot(){
+  let cfg;try{cfg=await (await fetch('/config')).json()}catch(e){document.getElementById('authErr').textContent='Cannot reach server.';showAuth();return}
+  supa=window.supabase.createClient(cfg.supabase_url,cfg.supabase_anon_key);
+  document.getElementById('authBtn').onclick=doAuth;
+  document.getElementById('authToggle').onclick=toggleMode;
+  document.getElementById('signout').onclick=async()=>{await supa.auth.signOut();location.reload()};
+  document.getElementById('authPass').addEventListener('keydown',e=>{if(e.key==='Enter')doAuth()});
+  const {data:{session}}=await supa.auth.getSession();
+  if(session)onLogin(session);else showAuth();
+}
+boot();
 </script>
 </body>
 </html>
