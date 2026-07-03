@@ -6,28 +6,40 @@ from dotenv import load_dotenv
 load_dotenv()
 client = OpenAI()
 
+
 # embeds the question into a vector
 def embed_query(text):
     response = client.embeddings.create(
-        model="text-embedding-3-small",   
-        input=[text]
+        model="text-embedding-3-small",
+        input=[text],
     )
-
     return response.data[0].embedding
 
-def search(query, top_k=5, source=None, doc_type=None):
+
+def _scope(collection_ids):
+    """Build the SQL scope clause + params for the shared corpus + allowed collections.
+
+    collection_ids=None  -> global reference corpus only (collection_id IS NULL).
+    collection_ids=[...]  -> global corpus PLUS those collections (and nothing else).
+    """
+    if collection_ids:
+        return "(collection_id IS NULL OR collection_id = ANY(%s))", [list(collection_ids)]
+    return "collection_id IS NULL", []
+
+
+def search(query, top_k=5, source=None, doc_type=None, collection_ids=None):
     embedding = embed_query(query)
     embedding_str = "[" + ",".join(str(x) for x in embedding) + "]"
 
-    conditions = []
-    params = []
+    scope_sql, params = _scope(collection_ids)
+    conditions = [scope_sql]
     if source:
         conditions.append("source = %s")
         params.append(source)
     if doc_type:
         conditions.append("doc_type = %s")
         params.append(doc_type)
-    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    where_clause = "WHERE " + " AND ".join(conditions)
 
     params.append(embedding_str)   # for the <=> similarity operator
     params.append(top_k)           # for LIMIT
@@ -42,20 +54,24 @@ def search(query, top_k=5, source=None, doc_type=None):
             {where_clause}
             ORDER BY embedding <=> %s::vector
             LIMIT %s""",
-        params
+        params,
     )
     results = cur.fetchall()
     cur.close()
     conn.close()
     return results
 
-def list_documents(source=None, doc_type=None, limit=100):
-    conditions, params = [], []
+
+def list_documents(source=None, doc_type=None, limit=100, collection_ids=None):
+    scope_sql, params = _scope(collection_ids)
+    conditions = [scope_sql]
     if source:
-        conditions.append("source = %s"); params.append(source)
+        conditions.append("source = %s")
+        params.append(source)
     if doc_type:
-        conditions.append("doc_type = %s"); params.append(doc_type)
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        conditions.append("doc_type = %s")
+        params.append(doc_type)
+    where = "WHERE " + " AND ".join(conditions)
     params.append(limit)
 
     conn = psycopg2.connect(dbname="regintel")
@@ -67,17 +83,22 @@ def list_documents(source=None, doc_type=None, limit=100):
         LIMIT %s
     """, params)
     rows = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close()
+    conn.close()
     return rows
 
-def fetch_document(title, max_chars=12000):
+
+def fetch_document(title, max_chars=12000, collection_ids=None):
+    scope_sql, params = _scope(collection_ids)
+    params = [title] + params
     conn = psycopg2.connect(dbname="regintel")
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(f"""
         SELECT content FROM chunks
-        WHERE COALESCE(company, source_file) = %s
+        WHERE COALESCE(company, source_file) = %s AND {scope_sql}
         ORDER BY id
-    """, (title,))
+    """, params)
     rows = cur.fetchall()
-    cur.close(); conn.close()
+    cur.close()
+    conn.close()
     return "\n".join(r[0] for r in rows)[:max_chars]

@@ -1,3 +1,5 @@
+import re
+import json
 import time
 import requests
 import trafilatura
@@ -148,10 +150,81 @@ def ingest_document(doc, conn):
     conn.commit()
     print(f"  stored {len(chunks)} chunks")
 
-def fda_adapter(max_pages=1, delay=1.0):
-    letters = get_letters(max_pages=max_pages, delay=delay)
+def _url_ingested(conn, url):
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM chunks WHERE url = %s LIMIT 1", (url,))
+    ok = cur.fetchone() is not None
+    cur.close()
+    return ok
+
+def fda_letter_list(delay=0.5):
+    """Yield every FDA warning letter's metadata via the DataTables AJAX endpoint —
+    the real server-side data source behind the JS-paginated table.
+
+    Each item: {company, url, office, subject, issue_date}.
+    """
+    # Read the current DataTables config from the page (the view_dom_id can rotate).
+    r = requests.get(BASE, headers=HEADERS, timeout=30)
+    r.raise_for_status()
+    m = re.search(r'data-drupal-selector="drupal-settings-json">(.*?)</script>', r.text, re.S)
+    cfg = list(json.loads(m.group(1))["datatables"].values())[0]
+    ajax = cfg["ajax"]
+    ajax_url = "https://www.fda.gov" + ajax["url"]
+    base_params = dict(ajax["data"])
+
+    hdrs = {**HEADERS, "X-Requested-With": "XMLHttpRequest"}
+    start, length, draw, total = 0, 100, 1, None
+    while total is None or start < total:
+        params = dict(base_params)
+        params.update({"draw": draw, "start": start, "length": length})
+        resp = requests.get(ajax_url, params=params, headers=hdrs, timeout=60)
+        resp.raise_for_status()
+        data = resp.json()
+        total = data["recordsTotal"]
+        for row in data["data"]:
+            a = BeautifulSoup(row[2], "html.parser").find("a")
+            if not a or not a.get("href"):
+                continue
+            yield {
+                "company":    a.get_text(strip=True),
+                "url":        urljoin("https://www.fda.gov", a["href"]),
+                "office":     (row[3] or "").strip(),
+                "subject":    (row[4] or "").strip(),
+                "issue_date": BeautifulSoup(row[1], "html.parser").get_text(strip=True),
+            }
+        draw += 1
+        start += length
+        time.sleep(delay)
+
+def fda_adapter(delay=1.0, offices=None, skip_existing=True):
+    """Ingest FDA warning letters via the DataTables data source.
+
+    offices       : list of substrings matched against the issuing office, e.g.
+                    ["Drug Evaluation and Research", "Biologics Evaluation and Research"];
+                    None keeps every letter.
+    skip_existing : skip letters already in the DB, so the run is resumable.
+    """
+    conn = psycopg2.connect(dbname="regintel")
+    letters = list(fda_letter_list())          # full list first (~36 fast requests)
+    if offices:
+        letters = [l for l in letters
+                   if any(o.lower() in l["office"].lower() for o in offices)]
+    print(f"  {len(letters)} matching letters found; fetching bodies…")
+
+    queued = 0
     for letter in letters:
-        text = fetch_letter_text(letter["url"])
+        if skip_existing and _url_ingested(conn, letter["url"]):
+            continue
+        try:
+            text = fetch_letter_text(letter["url"])
+        except Exception as e:
+            print(f"  skip {letter['company']}: {e}")
+            continue
+        if not text:
+            continue
+        queued += 1
+        if queued % 25 == 0:
+            print(f"  ingested {queued} new letters…")
         yield {
             "text":     text,
             "title":    letter["company"],
@@ -162,6 +235,7 @@ def fda_adapter(max_pages=1, delay=1.0):
             "url":      letter["url"],
         }
         time.sleep(delay)
+    conn.close()
 
 def ingest_source(adapter, conn):
     for i, doc in enumerate(adapter, 1):
@@ -275,19 +349,26 @@ def web_adapter(source, docs, delay=1.0):
         time.sleep(delay)
 
 if __name__ == "__main__":
-    # Full corpus refresh. Comment out any source you don't want to re-ingest.
-    # Ingestion is idempotent (rows are replaced by URL), so re-running is safe.
     conn = psycopg2.connect(dbname="regintel")
 
-    # US — FDA enforcement letters + guidance documents
-    ingest_source(fda_adapter(max_pages=30), conn)
-    ingest_source(pdf_adapter("FDA", FDA_GUIDANCE_DOCS), conn)
+    # Full FDA warning-letter crawl — all drug + biologics enforcement.
+    # FDA's office labels are inconsistent and much drug CGMP enforcement is issued
+    # by ORA field offices (e.g. "Division of Pharmaceutical Quality Operations"),
+    # NOT tagged to CDER/CBER directly — so we match on substrings that identify
+    # drug/biologics offices. None of FDA's food/tobacco/device/import/veterinary
+    # offices contain these strings, so this stays scoped to drug + biologics.
+    # Skips letters already ingested, so it's resumable.
+    ingest_source(fda_adapter(offices=[
+        "drug",                    # CDER + Unapproved Drugs + OPDP (drug promotion)
+        "biologic",                # CBER + Biological Products Operations + Biologics Quality
+        "pharmaceutical quality",  # Division/Office of Pharmaceutical Quality Operations (field)
+        "manufacturing quality",   # Office of Manufacturing Quality (drug CGMP)
+    ]), conn)
 
-    # US — eCFR regulations (full Title 21; large and slow — comment out to skip)
-    ingest_source(ecfr_adapter(), conn)
-
-    # EU + UK guidance
-    ingest_source(pdf_adapter("EMA", EMA_DOCS), conn)
-    ingest_source(web_adapter("MHRA", UK_DOCS), conn)
+    # Other sources (already ingested — uncomment to refresh):
+    # ingest_source(pdf_adapter("FDA", FDA_GUIDANCE_DOCS), conn)
+    # ingest_source(ecfr_adapter(), conn)               # full Title 21 (large/slow)
+    # ingest_source(pdf_adapter("EMA", EMA_DOCS), conn)
+    # ingest_source(web_adapter("MHRA", UK_DOCS), conn)
 
     conn.close()

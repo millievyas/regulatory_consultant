@@ -224,7 +224,9 @@ const I={
  list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
  projects:'<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>',
  plus:'<path d="M12 5v14M5 12h14"/>',
- trash:'<path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>'
+ trash:'<path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/>',
+ upload:'<path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+ folder:'<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V7z"/>'
 };
 function icon(n,c=''){return `<svg class="${c}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[n]||''}</svg>`}
 
@@ -269,22 +271,30 @@ function setLive(ok){const b=document.getElementById('liveBadge');b.classList.to
 
 /* ---------- pages (real data only) ---------- */
 function pageDashboard(){
-  if(!OV)return skeletonGrid();
-  const docsBySource={};(DOCS||[]).forEach(d=>docsBySource[d.source]=(docsBySource[d.source]||0)+1);
+  if(!OV||!ME)return skeletonGrid();
   const kpis=[
-   {l:'Total Chunks',v:OV.total_chunks.toLocaleString(),m:'Embedded & searchable',ic:'layers',col:'var(--blue)',bg:'var(--blue-soft)'},
-   {l:'Documents',v:OV.total_docs.toLocaleString(),m:'Distinct indexed documents',ic:'documents',col:'var(--emerald)',bg:'var(--emerald-soft)'},
+   {l:'My Projects',v:String(ME.projects),m:'Client engagements',ic:'projects',col:'var(--blue)',bg:'var(--blue-soft)'},
+   {l:'My Consultations',v:String(ME.consultations),m:'Questions answered',ic:'consult',col:'var(--emerald)',bg:'var(--emerald-soft)'},
    {l:'Authorities',v:String(OV.sources.length),m:OV.sources.map(s=>s.source).join(' · '),ic:'kb',col:'#7c3aed',bg:'#f3edff'},
-   {l:'Document Types',v:String(OV.doc_types.length),m:OV.doc_types.map(d=>d.doc_type).join(' · '),ic:'consult',col:'var(--amber)',bg:'var(--amber-soft)'},
+   {l:'Knowledge Base',v:OV.total_chunks.toLocaleString(),m:OV.total_docs.toLocaleString()+' documents indexed',ic:'layers',col:'var(--amber)',bg:'var(--amber-soft)'},
   ];
   const maxS=Math.max(...OV.sources.map(s=>s.count));
   const maxT=Math.max(...OV.doc_types.map(d=>d.count));
+  const recent=ME.recent||[];
   return `<div class="crumbs"><b>Home</b> / Dashboard</div>
-  <div class="page-head"><div><h1>Knowledge Base Overview</h1><div class="sub">Live composition of the regulatory corpus, straight from the vector store.</div></div></div>
+  <div class="page-head"><div><h1>Dashboard</h1><div class="sub">Your workspace at a glance.</div></div>
+    <button class="btn primary" onclick="currentRoute='projects';render()">${icon('projects')} Go to Projects</button></div>
   <div class="grid kpis" style="margin-bottom:18px">
     ${kpis.map(k=>`<div class="card kpi"><div class="top"><div class="kicon" style="background:${k.bg};color:${k.col}">${icon(k.ic)}</div></div>
       <div class="label">${k.l}</div><div class="val">${k.v}</div><div class="meta">${k.m}</div></div>`).join('')}
   </div>
+  <div class="card" style="margin-bottom:18px"><div class="card-h"><h3>Recent Consultations</h3><a onclick="currentRoute='projects';render()" style="cursor:pointer">View projects</a></div>
+    ${recent.length?`<div style="padding:6px 8px">${recent.map(c=>`<div ${c.project_id?`onclick="openWorkspace(${c.project_id})"`:''} style="display:flex;align-items:center;gap:12px;padding:12px;border-radius:9px;cursor:${c.project_id?'pointer':'default'}">
+      <div class="miniav" style="background:var(--blue-soft);color:var(--blue)">${icon('consult')}</div>
+      <div style="flex:1;min-width:0"><div class="pname" style="font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.question)}</div>
+        <div class="sub">${c.project_name?esc(c.project_name):'Ad-hoc'}${c.agents?' · '+esc(c.agents):''}</div></div>
+      <div class="sub" style="white-space:nowrap">${timeAgo(c.created_at)}</div></div>`).join('')}</div>`
+    :`<div class="empty-page" style="padding:44px"><h3>No consultations yet</h3><p>Create a project and ask your first question.</p></div>`}</div>
   <div class="grid cols-2" style="margin-bottom:18px">
     <div class="card"><div class="card-h"><h3>Corpus by Authority</h3><span class="cap">chunks</span></div>
       <div class="bars">${OV.sources.map(s=>`<div class="bar"><div class="bl"><span class="nm"><span class="sdot" style="background:${acol(s.source)}"></span>${s.source}</span><span class="ct">${s.count.toLocaleString()}</span></div>
@@ -330,7 +340,11 @@ function pageKB(){
   if(!OV||!DOCS)return skeletonGrid();
   const docsBySource={};DOCS.forEach(d=>docsBySource[d.source]=(docsBySource[d.source]||0)+1);
   return `<div class="crumbs"><b>Home</b> / Knowledge Base</div>
-  <div class="page-head"><div><h1>Knowledge Base</h1><div class="sub">Connected regulatory authorities and their indexed corpora.</div></div></div>
+  <div class="page-head"><div><h1>Knowledge Base</h1><div class="sub">Your document collections and the shared regulatory corpus.</div></div>
+    <button class="btn primary" onclick="openCollectionModal()">${icon('plus')} New Collection</button></div>
+  <div style="font-weight:600;font-size:13px;color:var(--text-2);margin:0 0 12px">My Collections</div>
+  <div id="collGrid" style="margin-bottom:28px"><div class="card skel" style="height:100px"></div></div>
+  <div style="font-weight:600;font-size:13px;color:var(--text-2);margin:0 0 12px">Reference Authorities</div>
   <div class="cardgrid">${OV.sources.map(s=>`<div class="card agency">
     <div class="flag" style="background:${acol(s.source)}">${AG[s.source]?.r||'—'}</div>
     <div class="an">${s.source}</div><div class="ad">Indexed &amp; searchable</div>
@@ -395,12 +409,14 @@ function skeletonGrid(){return `<div class="grid kpis" style="margin-bottom:18px
 const PAGES={dashboard:pageDashboard,projects:pageProjects,consult:pageConsult,documents:pageDocuments,kb:pageKB,agents:pageAgents,settings:pageSettings};
 let currentRoute='dashboard';
 function render(){
-  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.route===currentRoute||(currentRoute==='workspace'&&n.dataset.route==='projects')));
-  if(currentRoute!=='workspace')document.getElementById('topTitle').textContent=(NAV.find(n=>n.id===currentRoute)||{}).label||'';
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.toggle('active',n.dataset.route===currentRoute||(currentRoute==='workspace'&&n.dataset.route==='projects')||(currentRoute==='collection'&&n.dataset.route==='kb')));
+  if(currentRoute!=='workspace'&&currentRoute!=='collection')document.getElementById('topTitle').textContent=(NAV.find(n=>n.id===currentRoute)||{}).label||'';
   if(currentRoute==='workspace'){document.getElementById('page').innerHTML=pageWorkspace();loadWorkspace();return;}
+  if(currentRoute==='collection'){document.getElementById('page').innerHTML=pageCollection();loadCollection();return;}
   document.getElementById('page').innerHTML=(PAGES[currentRoute]||pageDashboard)();
   if(currentRoute==='consult')wireConsult();
   if(currentRoute==='projects')loadProjects();
+  if(currentRoute==='kb')loadCollections();
   if(currentRoute==='documents'&&DOCS){renderDocRows();['fSource','fType','fSearch'].forEach(id=>document.getElementById(id).addEventListener('input',renderDocRows));}
 }
 document.getElementById('nav').addEventListener('click',e=>{const a=e.target.closest('.nav-item');if(a){currentRoute=a.dataset.route;render();document.getElementById('page').scrollTop=0;}});
@@ -454,6 +470,7 @@ function scrollPage(){const p=document.getElementById('page');p.scrollTop=p.scro
 
 /* ---------- projects + workspace ---------- */
 let PROJECTS=null,currentProjectId=null,currentProjectObj=null;
+let COLLECTIONS=null,currentCollectionId=null,currentAttached=[];
 function hashColor(s){const cs=['#2563eb','#7c3aed','#0891b2','#059669','#d97706','#db2777'];let h=0;for(const c of (s||'')) h=c.charCodeAt(0)+((h<<5)-h);return cs[Math.abs(h)%cs.length]}
 function gv(id){return document.getElementById(id).value.trim()}
 
@@ -504,7 +521,9 @@ async function loadWorkspace(){
   try{proj=await (await api('/projects/'+currentProjectId)).json();
       cons=(await (await api('/consultations?project_id='+currentProjectId)).json()).consultations;}
   catch(e){const r=document.getElementById('wsRoot');if(r)r.innerHTML='<div class="empty-page"><h3>Could not load project</h3></div>';return}
-  currentProjectObj=proj;document.getElementById('topTitle').textContent=proj.name;
+  if(!COLLECTIONS){try{COLLECTIONS=(await (await api('/collections')).json()).collections}catch(e){COLLECTIONS=[]}}
+  let attached=[];try{attached=(await (await api('/projects/'+currentProjectId+'/collections')).json()).collection_ids}catch(e){}
+  currentProjectObj=proj;currentAttached=attached.slice();document.getElementById('topTitle').textContent=proj.name;
   const meta=[['Client',proj.client],['Region',proj.region],['Drug Type',proj.drug_type],['Submission',proj.submission_type],['Agencies',proj.agencies]].filter(m=>m[1]);
   const root=document.getElementById('wsRoot');if(!root)return;
   root.innerHTML=`
@@ -513,6 +532,8 @@ async function loadWorkspace(){
       <button class="btn" onclick="deleteProject(${proj.id})">${icon('trash')} Delete</button></div>
     ${meta.length?`<div class="card" style="margin-bottom:18px"><div style="display:flex;flex-wrap:wrap;gap:26px;padding:16px 20px">
       ${meta.map(m=>`<div><div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">${m[0]}</div><div style="font-weight:600;margin-top:3px">${esc(m[1])}</div></div>`).join('')}</div></div>`:''}
+    <div class="card" style="margin-bottom:18px"><div class="card-h"><h3>Reference Collections</h3><span class="cap">your documents added to this project's context</span></div>
+      <div style="padding:14px 20px">${(COLLECTIONS&&COLLECTIONS.length)?COLLECTIONS.map(c=>`<label style="display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:8px;padding:7px 12px;cursor:pointer;font-size:13px;margin:0 8px 8px 0"><input type="checkbox" ${attached.includes(c.id)?'checked':''} onchange="toggleCollection(${c.id},this.checked)"/> ${esc(c.name)} <span class="sub">(${c.documents||0})</span></label>`).join(''):`<span class="sub">No collections yet — create one in the Knowledge Base to add your own documents.</span>`}</div></div>
     <div class="promptbox" style="margin-bottom:20px"><textarea id="wsInput" rows="1" placeholder="Ask a question for this project…"></textarea><button class="send" id="wsSend">↑</button></div>
     <div class="workflow" id="wsWf"></div>`;
   const wf=document.getElementById('wsWf');
@@ -534,6 +555,78 @@ async function askInProject(q){
   scrollPage();
 }
 async function deleteProject(id){if(!confirm('Delete this project and all its consultations?'))return;await api('/projects/'+id,{method:'DELETE'});currentRoute='projects';render();}
+
+/* ---------- collections + uploads ---------- */
+async function loadCollections(){
+  try{COLLECTIONS=(await (await api('/collections')).json()).collections}catch(e){COLLECTIONS=[]}
+  const g=document.getElementById('collGrid');if(!g)return;
+  if(!COLLECTIONS.length){g.className='';g.removeAttribute('style');g.innerHTML=`<div class="card" style="padding:22px;text-align:center;color:var(--muted);font-size:13.5px">No collections yet. Create one to upload your own documents.</div>`;return}
+  g.className='cardgrid';g.removeAttribute('style');
+  g.innerHTML=COLLECTIONS.map(c=>`<div class="card agency" style="cursor:pointer" onclick="openCollection(${c.id})">
+    <div class="flag" style="background:${hashColor(c.name)}">${icon('folder')}</div>
+    <div class="an">${esc(c.name)}</div><div class="ad">Uploaded documents</div>
+    <div class="arow"><div><div class="n">${c.documents||0}</div><div class="l">DOCUMENTS</div></div>
+      <div style="text-align:right"><div class="l">${new Date(c.created_at).toLocaleDateString()}</div></div></div></div>`).join('');
+}
+function openCollectionModal(){
+  const m=document.createElement('div');m.className='modal-ov';m.id='projModal';
+  m.innerHTML=`<div class="modal"><div class="modal-h"><h3>New Collection</h3><button class="xbtn" onclick="closeModal()">✕</button></div>
+    <div class="modal-b"><label>Collection name *</label><input id="cName" placeholder="e.g. Zentara SOPs"/><div class="autherr" id="cErr"></div></div>
+    <div class="modal-f"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn primary" id="cCreate">Create</button></div></div>`;
+  document.body.appendChild(m);document.getElementById('cCreate').onclick=createCollection;document.getElementById('cName').focus();
+}
+async function createCollection(){
+  const name=gv('cName');if(!name){document.getElementById('cErr').textContent='Name is required.';return}
+  const res=await api('/collections',{method:'POST',body:JSON.stringify({name})});
+  if(!res.ok){document.getElementById('cErr').textContent='Could not create collection.';return}
+  closeModal();loadCollections();
+}
+function openCollection(id){currentCollectionId=id;currentRoute='collection';render();document.getElementById('page').scrollTop=0;}
+function pageCollection(){return `<div id="collRoot"><div class="card skel" style="height:90px"></div></div>`;}
+async function loadCollection(){
+  const coll=(COLLECTIONS||[]).find(c=>c.id===currentCollectionId)||{name:'Collection'};
+  document.getElementById('topTitle').textContent=coll.name;
+  let docs;try{docs=(await (await api('/collections/'+currentCollectionId+'/documents')).json()).documents}catch(e){docs=[]}
+  const root=document.getElementById('collRoot');if(!root)return;
+  root.innerHTML=`
+    <div class="crumbs"><b>Home</b> / <a onclick="currentRoute='kb';render()" style="cursor:pointer;color:var(--blue)">Knowledge Base</a> / ${esc(coll.name)}</div>
+    <div class="page-head"><div><h1>${esc(coll.name)}</h1><div class="sub">${docs.length} document(s)</div></div>
+      <button class="btn" onclick="deleteCollection(${currentCollectionId})">${icon('trash')} Delete Collection</button></div>
+    <div class="dropzone" id="dz"><div class="di">${icon('upload')}</div>
+      <div style="font-weight:600;color:var(--text)">Upload a PDF</div>
+      <div style="font-size:12.5px;margin-top:4px">Drag &amp; drop, or <a style="color:var(--blue);font-weight:600;cursor:pointer" onclick="document.getElementById('fileInput').click()">browse</a></div>
+      <input type="file" id="fileInput" accept="application/pdf" style="display:none"/></div>
+    <div id="uploadStatus" style="margin:12px 2px;font-size:13px"></div>
+    <div class="card"><table><thead><tr><th>Document</th><th>Chunks</th></tr></thead>
+    <tbody id="docList">${docs.length?docs.map(docRow).join(''):'<tr><td colspan="2" style="text-align:center;padding:24px;color:var(--muted)">No documents yet — upload a PDF above.</td></tr>'}</tbody></table></div>`;
+  wireUpload();
+}
+function docRow(d){return `<tr><td><div class="cellrow"><div class="miniav" style="background:var(--blue-soft);color:var(--blue)">${icon('file')}</div><span class="pname">${esc(d.title)}</span></div></td><td class="mono">${d.chunks}</td></tr>`;}
+function wireUpload(){
+  const dz=document.getElementById('dz'),input=document.getElementById('fileInput');
+  input.onchange=()=>{if(input.files[0])uploadFile(input.files[0])};
+  dz.ondragover=e=>{e.preventDefault();dz.style.borderColor='var(--blue)'};
+  dz.ondragleave=()=>{dz.style.borderColor=''};
+  dz.ondrop=e=>{e.preventDefault();dz.style.borderColor='';if(e.dataTransfer.files[0])uploadFile(e.dataTransfer.files[0])};
+}
+async function uploadFile(f){
+  const st=document.getElementById('uploadStatus');
+  if(!f.name.toLowerCase().endsWith('.pdf')){st.innerHTML='<span style="color:var(--red)">Only PDF files are supported.</span>';return}
+  st.innerHTML=`<span style="color:var(--text-2)"><span class="spinner" style="vertical-align:-2px"></span> Uploading &amp; indexing ${esc(f.name)}…</span>`;
+  const fd=new FormData();fd.append('file',f);
+  try{
+    const res=await fetch('/collections/'+currentCollectionId+'/upload',{method:'POST',headers:{'Authorization':'Bearer '+authToken},body:fd});
+    if(!res.ok){const e=await res.json().catch(()=>({}));st.innerHTML='<span style="color:var(--red)">'+esc(e.detail||'Upload failed')+'</span>';return}
+    const data=await res.json();
+    st.innerHTML=`<span style="color:var(--emerald)">✓ Indexed ${esc(data.title)} (${data.chunks} chunks)</span>`;
+    await loadCollections();loadCollection();
+  }catch(e){st.innerHTML='<span style="color:var(--red)">Upload error.</span>'}
+}
+async function deleteCollection(id){if(!confirm('Delete this collection and all its documents?'))return;await api('/collections/'+id,{method:'DELETE'});COLLECTIONS=null;currentRoute='kb';render();}
+function toggleCollection(id,on){
+  currentAttached=on?[...new Set([...currentAttached,id])]:currentAttached.filter(x=>x!==id);
+  api('/projects/'+currentProjectId+'/collections',{method:'PUT',body:JSON.stringify({collection_ids:currentAttached})});
+}
 
 let supa=null,authToken=null,authMode='login';
 async function api(path,opts={}){opts.headers=Object.assign({'Content-Type':'application/json'},opts.headers||{});if(authToken)opts.headers['Authorization']='Bearer '+authToken;return fetch(path,opts);}

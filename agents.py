@@ -55,8 +55,8 @@ SEARCH_TOOL = {
             "type": "object",
             "properties": {
                 "query":    {"type": "string", "description": "What to search for"},
-                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA"],
-                             "description": "Optional: restrict to one authority"},
+                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "Uploaded"],
+                             "description": "Optional: restrict to one source. Use 'Uploaded' for the user's own project documents."},
                 "doc_type": {"type": "string", "enum": ["regulation", "guidance", "warning_letter"],
                              "description": "Optional: restrict to one document type"},
             },
@@ -74,8 +74,8 @@ LIST_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA"]},
-                "doc_type": {"type": "string", "enum": ["regulation", "guidance", "warning_letter"]},
+                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "Uploaded"]},
+                "doc_type": {"type": "string", "enum": ["regulation", "guidance", "warning_letter", "upload"]},
             },
         },
     },
@@ -97,9 +97,10 @@ FETCH_TOOL = {
     },
 }
 
-def execute_search(args):
-    results = search(args["query"], top_k=5,
-                     source=args.get("source"), doc_type=args.get("doc_type"))
+def execute_search(args, collection_ids=None):
+    results = search(args["query"], top_k=8,
+                     source=args.get("source"), doc_type=args.get("doc_type"),
+                     collection_ids=collection_ids)
     if not results:
         return "No matching documents found."
     return "\n\n".join(
@@ -107,14 +108,15 @@ def execute_search(args):
         for content, company, subject, url, source in results
     )
 
-def execute_list(args):
-    rows = list_documents(source=args.get("source"), doc_type=args.get("doc_type"))
+def execute_list(args, collection_ids=None):
+    rows = list_documents(source=args.get("source"), doc_type=args.get("doc_type"),
+                          collection_ids=collection_ids)
     if not rows:
         return "No documents found."
     return "\n".join(f"- {title}  [{source}/{doc_type}]" for title, source, doc_type in rows)
 
-def execute_fetch(args):
-    text = fetch_document(args["title"])
+def execute_fetch(args, collection_ids=None):
+    text = fetch_document(args["title"], collection_ids=collection_ids)
     return text or f"No document found with title '{args['title']}'."
 
 # Map tool name -> executor, and the list of tool specs offered to the model.
@@ -191,14 +193,20 @@ def route(query, history=None):
 # Agents + coordinator
 # ---------------------------------------------------------------------------
 
-def run_agent_tools(agent_name, query, history=None, max_steps=5):
-    messages = [
-        {"role": "system", "content": AGENTS[agent_name] +
-            " You have three tools: search_documents (semantic search, optionally "
-            "filtered by source/doc_type), list_documents (discover what documents "
-            "exist), and fetch_document (read a whole document by title). Gather "
-            "evidence with these before answering; you may call them several times."},
-    ]
+def run_agent_tools(agent_name, query, history=None, max_steps=5, collection_ids=None):
+    sys_content = (AGENTS[agent_name] +
+        " You have three tools: search_documents (semantic search, optionally "
+        "filtered by source/doc_type), list_documents (discover what documents "
+        "exist), and fetch_document (read a whole document by title). Gather "
+        "evidence with these before answering; you may call them several times.")
+    if collection_ids:
+        sys_content += (" This project has the user's own UPLOADED documents attached. "
+            "For EVERY question, run at least one search_documents WITHOUT a source "
+            "filter — an unfiltered search returns both the regulatory corpus and the "
+            "project's uploaded documents ranked by relevance, so their documents are "
+            "always considered even when they don't explicitly mention them. Prefer the "
+            "uploaded documents for project-specific facts and cite them clearly.")
+    messages = [{"role": "system", "content": sys_content}]
 
     if history:
         messages += history
@@ -226,12 +234,12 @@ def run_agent_tools(agent_name, query, history=None, max_steps=5):
             args = json.loads(tc.function.arguments)
             fn = TOOL_DISPATCH.get(tc.function.name)
             print(f"  [tool] {tc.function.name}({args})")
-            result = fn(args) if fn else f"Unknown tool: {tc.function.name}"
+            result = fn(args, collection_ids) if fn else f"Unknown tool: {tc.function.name}"
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
     return "Stopped after max search steps.", usage
 
-def coordinate(query, history=None):
+def coordinate(query, history=None, collection_ids=None):
     history = history or []
     start = time.perf_counter()
     agents = route(query, history)
@@ -241,7 +249,7 @@ def coordinate(query, history=None):
     # running the agents back-to-back.
     with ThreadPoolExecutor(max_workers=len(agents)) as pool:
         outputs = list(pool.map(
-            lambda name: (name, run_agent_tools(name, query, history)),
+            lambda name: (name, run_agent_tools(name, query, history, collection_ids=collection_ids)),
             agents
         ))
 

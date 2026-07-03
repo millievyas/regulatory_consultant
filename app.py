@@ -16,12 +16,14 @@ from typing import Optional
 import requests
 import psycopg2
 import psycopg2.extras
-from fastapi import FastAPI, Depends, Header, HTTPException
+from fastapi import FastAPI, Depends, Header, HTTPException, File, UploadFile
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+import pymupdf
 from agents import coordinate
+from ingest import chunk_text, embed_chunks
 
 load_dotenv()
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
@@ -67,6 +69,14 @@ class ProjectCreate(BaseModel):
     drug_type: str = ""
     submission_type: str = ""
     agencies: str = ""
+
+
+class CollectionCreate(BaseModel):
+    name: str
+
+
+class AttachCollections(BaseModel):
+    collection_ids: list = []
 
 
 # ------------------------------------------------------------------ static + config
@@ -196,9 +206,30 @@ def list_consultations(project_id: int, user: str = Depends(current_user)):
     return {"consultations": [dict(r) for r in rows]}
 
 
+def project_collection_ids(project_id, user):
+    """Return the user's own collections attached to their project (or None)."""
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM projects WHERE id = %s AND user_id = %s", (project_id, user))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Project not found")
+    cur.execute("""
+        SELECT pc.collection_id FROM project_collections pc
+        JOIN collections c ON c.id = pc.collection_id
+        WHERE pc.project_id = %s AND c.user_id = %s
+    """, (project_id, user))
+    ids = [r[0] for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return ids or None
+
+
 @app.post("/ask")
 def ask(req: AskRequest, user: str = Depends(current_user)):
-    answer, metrics = coordinate(req.question, req.history)
+    collection_ids = project_collection_ids(req.project_id, user) if req.project_id else None
+    answer, metrics = coordinate(req.question, req.history, collection_ids=collection_ids)
     agent_names = re.findall(r"^###\s+(.+?)\s+Agent", answer, re.M)
 
     conn = db()
@@ -235,3 +266,154 @@ def me_overview(user: str = Depends(current_user)):
     cur.close()
     conn.close()
     return {"projects": projects, "consultations": consultations, "recent": recent}
+
+
+# ------------------------------------------------------------------ collections
+@app.get("/collections")
+def list_collections(user: str = Depends(current_user)):
+    conn = db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("""
+        SELECT c.*,
+            (SELECT count(DISTINCT COALESCE(company, source_file))
+             FROM chunks ch WHERE ch.collection_id = c.id) AS documents
+        FROM collections c WHERE c.user_id = %s ORDER BY c.created_at DESC
+    """, (user,))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    return {"collections": [dict(r) for r in rows]}
+
+
+@app.post("/collections")
+def create_collection(body: CollectionCreate, user: str = Depends(current_user)):
+    conn = db()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    cur.execute("INSERT INTO collections (user_id, name) VALUES (%s, %s) RETURNING *",
+                (user, body.name))
+    row = cur.fetchone()
+    conn.commit()
+    cur.close()
+    conn.close()
+    return dict(row)
+
+
+@app.delete("/collections/{cid}")
+def delete_collection(cid: int, user: str = Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM collections WHERE id = %s AND user_id = %s", (cid, user))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Collection not found")
+    cur.execute("DELETE FROM chunks WHERE collection_id = %s", (cid,))
+    cur.execute("DELETE FROM collections WHERE id = %s", (cid,))  # project links cascade
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"deleted": True}
+
+
+@app.get("/collections/{cid}/documents")
+def collection_documents(cid: int, user: str = Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM collections WHERE id = %s AND user_id = %s", (cid, user))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Collection not found")
+    cur.execute("""
+        SELECT COALESCE(company, source_file) AS title, count(*) AS chunks
+        FROM chunks WHERE collection_id = %s
+        GROUP BY COALESCE(company, source_file) ORDER BY title
+    """, (cid,))
+    docs = [{"title": t, "chunks": c} for t, c in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return {"documents": docs}
+
+
+@app.post("/collections/{cid}/upload")
+async def upload_document(cid: int, file: UploadFile = File(...),
+                          user: str = Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM collections WHERE id = %s AND user_id = %s", (cid, user))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Collection not found")
+
+    data = await file.read()
+    try:
+        doc = pymupdf.open(stream=data, filetype="pdf")
+        text = "\n".join(doc[i].get_text() for i in range(doc.page_count))
+        doc.close()
+    except Exception:
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=400, detail="Could not read the PDF")
+    if not text.strip():
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=400, detail="No extractable text in the PDF")
+
+    title = file.filename
+    chunks = chunk_text([(1, text)])
+    embeddings = embed_chunks(chunks)
+    cur.execute("DELETE FROM chunks WHERE collection_id = %s AND source_file = %s", (cid, title))
+    for (chunk, _p), emb in zip(chunks, embeddings):
+        emb_str = "[" + ",".join(str(x) for x in emb) + "]"
+        cur.execute("""
+            INSERT INTO chunks (content, embedding, source_file, company,
+                                doc_type, source, collection_id, user_id)
+            VALUES (%s, %s, %s, %s, 'upload', 'Uploaded', %s, %s)
+        """, (chunk, emb_str, title, title, cid, user))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"title": title, "chunks": len(chunks)}
+
+
+# ------------------------------------------------------------------ project <-> collections
+@app.get("/projects/{pid}/collections")
+def get_project_collections(pid: int, user: str = Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM projects WHERE id = %s AND user_id = %s", (pid, user))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Project not found")
+    cur.execute("SELECT collection_id FROM project_collections WHERE project_id = %s", (pid,))
+    ids = [r[0] for r in cur.fetchall()]
+    cur.close()
+    conn.close()
+    return {"collection_ids": ids}
+
+
+@app.put("/projects/{pid}/collections")
+def set_project_collections(pid: int, body: AttachCollections,
+                            user: str = Depends(current_user)):
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM projects WHERE id = %s AND user_id = %s", (pid, user))
+    if not cur.fetchone():
+        cur.close()
+        conn.close()
+        raise HTTPException(status_code=404, detail="Project not found")
+    valid = []
+    if body.collection_ids:
+        cur.execute("SELECT id FROM collections WHERE id = ANY(%s) AND user_id = %s",
+                    (list(body.collection_ids), user))
+        valid = [r[0] for r in cur.fetchall()]
+    cur.execute("DELETE FROM project_collections WHERE project_id = %s", (pid,))
+    for cid in valid:
+        cur.execute("INSERT INTO project_collections (project_id, collection_id) VALUES (%s, %s)",
+                    (pid, cid))
+    conn.commit()
+    cur.close()
+    conn.close()
+    return {"collection_ids": valid}
