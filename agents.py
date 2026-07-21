@@ -1,3 +1,4 @@
+import re
 import time
 import json
 
@@ -5,6 +6,19 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 from query import search, list_documents, fetch_document
+from live import live_retrieve_and_persist
+
+# When the best local match is farther than this (cosine distance, 0 = identical),
+# the corpus probably can't answer — fall back to live authoritative APIs.
+LIVE_FALLBACK_DISTANCE = 0.55
+
+# Some questions are strictly better answered by live authoritative data than by
+# any corpus document (recall specifics, current labeling). When the query shows
+# that intent, consult the live APIs even if the corpus had a close match.
+LIVE_INTENT_RE = re.compile(
+    r"\b(recall(ed|s)?|withdraw(al|n|s)?|enforcement|market\s+withdrawal|"
+    r"indication[s]?|dosage|contraindicat\w*|drug\s+label\w*|labeling|"
+    r"boxed\s+warning|black\s+box)\b", re.I)
 
 # OpenAI pricing per token — VERIFY current rates at openai.com/pricing
 PRICE_IN  = 0.15 / 1_000_000   # gpt-4o-mini input tokens
@@ -17,6 +31,9 @@ client = OpenAI()
 GROUNDING = (
     " Cite the source and document for every claim (the company name for warning "
     "letters; the authority and document title for guidance and regulations). "
+    "Each search result is prefixed with [source | document | URL]. When you cite "
+    "a claim, use that EXACT URL as the link — never construct, guess, or "
+    "generalize a URL (e.g. do not link to a homepage). "
     "Use ONLY the provided context; if the answer isn't there, say so. Never "
     "invent facts, citations, or URLs."
 )
@@ -55,7 +72,7 @@ SEARCH_TOOL = {
             "type": "object",
             "properties": {
                 "query":    {"type": "string", "description": "What to search for"},
-                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "ICH", "EU GMP", "WHO", "Uploaded"],
+                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "ICH", "EU GMP", "WHO", "openFDA", "Uploaded"],
                              "description": "Optional: restrict to one source. Use 'Uploaded' for the user's own project documents."},
                 "doc_type": {"type": "string", "enum": ["regulation", "guidance", "warning_letter"],
                              "description": "Optional: restrict to one document type"},
@@ -74,7 +91,7 @@ LIST_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "ICH", "EU GMP", "WHO", "Uploaded"]},
+                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "ICH", "EU GMP", "WHO", "openFDA", "Uploaded"]},
                 "doc_type": {"type": "string", "enum": ["regulation", "guidance", "warning_letter", "upload"]},
             },
         },
@@ -98,14 +115,33 @@ FETCH_TOOL = {
 }
 
 def execute_search(args, collection_ids=None):
-    results = search(args["query"], top_k=8,
-                     source=args.get("source"), doc_type=args.get("doc_type"),
-                     collection_ids=collection_ids)
+    query = args["query"]
+    source = args.get("source")
+    doc_type = args.get("doc_type")
+
+    results = search(query, top_k=8, source=source, doc_type=doc_type,
+                     collection_ids=collection_ids, with_scores=True)
+
+    # Fetch from authoritative live APIs when either (a) the corpus has nothing
+    # close enough, or (b) the query's intent (recalls, labeling) is strictly
+    # better served by live data even if a corpus doc matched. Then persist and
+    # re-search over the fresh data. Only skip for the user's own private
+    # Uploaded docs — a public source filter (FDA/eCFR) should still allow live,
+    # since openFDA/eCFR ARE public authority data.
+    weak = (not results) or (results[0][5] > LIVE_FALLBACK_DISTANCE)
+    intent = bool(LIVE_INTENT_RE.search(query))
+    if (weak or intent) and source != "Uploaded":
+        if live_retrieve_and_persist(query):
+            # Re-search unfiltered so the freshly-stored live docs (source
+            # 'openFDA'/'eCFR', doc_type 'enforcement'/'label') can surface.
+            results = search(query, top_k=8,
+                             collection_ids=collection_ids, with_scores=True)
+
     if not results:
         return "No matching documents found."
     return "\n\n".join(
-        f"[{source} | {company}]\n{content}"
-        for content, company, subject, url, source in results
+        f"[{src} | {company} | {url}]\n{content}"
+        for content, company, subject, url, src, *_ in results
     )
 
 def execute_list(args, collection_ids=None):
