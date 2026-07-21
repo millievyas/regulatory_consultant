@@ -55,7 +55,7 @@ SEARCH_TOOL = {
             "type": "object",
             "properties": {
                 "query":    {"type": "string", "description": "What to search for"},
-                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "Uploaded"],
+                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "ICH", "EU GMP", "WHO", "Uploaded"],
                              "description": "Optional: restrict to one source. Use 'Uploaded' for the user's own project documents."},
                 "doc_type": {"type": "string", "enum": ["regulation", "guidance", "warning_letter"],
                              "description": "Optional: restrict to one document type"},
@@ -74,7 +74,7 @@ LIST_TOOL = {
         "parameters": {
             "type": "object",
             "properties": {
-                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "Uploaded"]},
+                "source":   {"type": "string", "enum": ["FDA", "eCFR", "EMA", "MHRA", "ICH", "EU GMP", "WHO", "Uploaded"]},
                 "doc_type": {"type": "string", "enum": ["regulation", "guidance", "warning_letter", "upload"]},
             },
         },

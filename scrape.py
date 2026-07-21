@@ -51,6 +51,55 @@ FDA_GUIDANCE_DOCS = [
      "title": "FDA Guidance - Pharmaceutical CGMPs for the 21st Century: A Risk-Based Approach"},
     {"url": "https://www.fda.gov/downloads/Drugs/Guidances/UCM070337.pdf",
      "title": "FDA Guidance - Quality Systems Approach to Pharmaceutical CGMP Regulations"},
+    {"url": "https://www.fda.gov/media/141720/download",
+     "title": "FDA Guidance - Control of Nitrosamine Impurities in Human Drugs"},
+    {"url": "https://www.fda.gov/media/88905/download",
+     "title": "FDA Guidance - CGMP for Human Drug Compounding Outsourcing Facilities (503B)"},
+    {"url": "https://www.fda.gov/media/97359/download",
+     "title": "FDA Guidance - Facility Definition Under Section 503B of the FD&C Act"},
+]
+
+# ICH quality guidelines — the global reference for pharma quality/manufacturing.
+# Free PDFs from ICH's document database.
+ICH_DOCS = [
+    {"url": "https://database.ich.org/sites/default/files/Q1A(R2)%20Guideline.pdf",
+     "title": "ICH Q1A(R2) - Stability Testing of New Drug Substances and Products"},
+    {"url": "https://database.ich.org/sites/default/files/ICH_Q2(R2)_Guideline_2023_1130.pdf",
+     "title": "ICH Q2(R2) - Validation of Analytical Procedures"},
+    {"url": "https://database.ich.org/sites/default/files/Q3A(R2)%20Guideline.pdf",
+     "title": "ICH Q3A(R2) - Impurities in New Drug Substances"},
+    {"url": "https://database.ich.org/sites/default/files/ICH_Q3C(R9)_Guideline_MinorRevision_2024_2024_Approved.pdf",
+     "title": "ICH Q3C(R9) - Impurities: Guideline for Residual Solvents"},
+    {"url": "https://database.ich.org/sites/default/files/Q6A%20Guideline.pdf",
+     "title": "ICH Q6A - Specifications: Test Procedures and Acceptance Criteria"},
+    {"url": "https://database.ich.org/sites/default/files/Q7_Guideline.pdf",
+     "title": "ICH Q7 - Good Manufacturing Practice for Active Pharmaceutical Ingredients"},
+    {"url": "https://database.ich.org/sites/default/files/Q8(R2)%20Guideline.pdf",
+     "title": "ICH Q8(R2) - Pharmaceutical Development"},
+    {"url": "https://database.ich.org/sites/default/files/ICH_Q9(R1)_Guideline_Step4_2022_1219.pdf",
+     "title": "ICH Q9(R1) - Quality Risk Management"},
+    {"url": "https://database.ich.org/sites/default/files/Q10%20Guideline.pdf",
+     "title": "ICH Q10 - Pharmaceutical Quality System"},
+    {"url": "https://database.ich.org/sites/default/files/Q11%20Guideline.pdf",
+     "title": "ICH Q11 - Development and Manufacture of Drug Substances"},
+]
+
+# EudraLex Volume 4 — the EU GMP guide. Free PDFs from the European Commission.
+EU_GMP_DOCS = [
+    {"url": "https://health.ec.europa.eu/system/files/2022-08/20220825_gmp-an1_en_0.pdf",
+     "title": "EudraLex Vol 4 Annex 1 - Manufacture of Sterile Medicinal Products (2022)"},
+    {"url": "https://health.ec.europa.eu/system/files/2016-11/2015-10_annex15_0.pdf",
+     "title": "EudraLex Vol 4 Annex 15 - Qualification and Validation"},
+    {"url": "https://health.ec.europa.eu/system/files/2016-11/annex11_01-2011_en_0.pdf",
+     "title": "EudraLex Vol 4 Annex 11 - Computerised Systems"},
+]
+
+# WHO Technical Report Series GMP annexes. Free PDFs from WHO.
+WHO_DOCS = [
+    {"url": "https://www.who.int/docs/default-source/medicines/norms-and-standards/guidelines/production/trs1019-annex3-gmp-validation.pdf",
+     "title": "WHO TRS 1019 Annex 3 - GMP: Guidelines on Validation"},
+    {"url": "https://www.who.int/docs/default-source/medicines/norms-and-standards/guidelines/production/trs961-annex6-gmp-sterile-pharmaceutical-products.pdf",
+     "title": "WHO TRS 961 Annex 6 - GMP for Sterile Pharmaceutical Products"},
 ]
 
 EMA_DOCS = [
@@ -351,24 +400,25 @@ def web_adapter(source, docs, delay=1.0):
 if __name__ == "__main__":
     conn = psycopg2.connect(dbname="regintel")
 
-    # Full FDA warning-letter crawl — all drug + biologics enforcement.
-    # FDA's office labels are inconsistent and much drug CGMP enforcement is issued
-    # by ORA field offices (e.g. "Division of Pharmaceutical Quality Operations"),
-    # NOT tagged to CDER/CBER directly — so we match on substrings that identify
-    # drug/biologics offices. None of FDA's food/tobacco/device/import/veterinary
-    # offices contain these strings, so this stays scoped to drug + biologics.
-    # Skips letters already ingested, so it's resumable.
-    ingest_source(fda_adapter(offices=[
-        "drug",                    # CDER + Unapproved Drugs + OPDP (drug promotion)
-        "biologic",                # CBER + Biological Products Operations + Biologics Quality
-        "pharmaceutical quality",  # Division/Office of Pharmaceutical Quality Operations (field)
-        "manufacturing quality",   # Office of Manufacturing Quality (drug CGMP)
-    ]), conn)
+    # --- Authority guidance: the "what's required" corpus that complements the
+    #     warning letters ("what went wrong"). Each ingest is idempotent (docs are
+    #     re-embedded by URL), so re-running is safe. Adapters skip any URL that
+    #     fails, so one dead link never aborts the run.
+    ingest_source(pdf_adapter("FDA", FDA_GUIDANCE_DOCS), conn)   # incl. new nitrosamine/503B
+    ingest_source(pdf_adapter("ICH", ICH_DOCS), conn)            # ICH Q1-Q11 quality guidelines
+    ingest_source(pdf_adapter("EU GMP", EU_GMP_DOCS), conn)      # EudraLex Vol 4 annexes
+    ingest_source(pdf_adapter("WHO", WHO_DOCS), conn)            # WHO TRS GMP annexes
 
-    # Other sources (already ingested — uncomment to refresh):
-    # ingest_source(pdf_adapter("FDA", FDA_GUIDANCE_DOCS), conn)
-    # ingest_source(ecfr_adapter(), conn)               # full Title 21 (large/slow)
+    # Already ingested — uncomment to refresh:
     # ingest_source(pdf_adapter("EMA", EMA_DOCS), conn)
     # ingest_source(web_adapter("MHRA", UK_DOCS), conn)
+    # ingest_source(ecfr_adapter(), conn)                        # full Title 21 (large/slow)
+
+    # Full FDA warning-letter crawl — all drug + biologics enforcement (DONE).
+    # Re-enable to pull newly-published letters; skip_existing makes it resumable
+    # and it won't re-embed anything already stored.
+    # ingest_source(fda_adapter(offices=[
+    #     "drug", "biologic", "pharmaceutical quality", "manufacturing quality",
+    # ]), conn)
 
     conn.close()
