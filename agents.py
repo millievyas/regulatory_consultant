@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from concurrent.futures import ThreadPoolExecutor
 from query import search, list_documents, fetch_document
 from live import live_retrieve_and_persist
+from letters import count_letters, list_letters, letters_by_year, top_companies
 
 # When the best local match is farther than this (cosine distance, 0 = identical),
 # the corpus probably can't answer — fall back to live authoritative APIs.
@@ -114,6 +115,57 @@ FETCH_TOOL = {
     },
 }
 
+STATS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "warning_letter_stats",
+        "description": "Quantitative queries over FDA warning-letter METADATA — "
+                       "counts, lists, year-by-year trends, and top companies. Use "
+                       "this for ANY 'how many', 'list', 'which companies', "
+                       "date-range, or trend question about warning letters. Do NOT "
+                       "use it to read letter contents — use search_documents for "
+                       "that. Scope defaults to drug + biologics/vaccine offices.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "operation": {"type": "string",
+                              "enum": ["count", "list", "by_year", "top_companies"],
+                              "description": "count = total matching; list = the letters; "
+                                             "by_year = counts per year; top_companies = most-cited firms."},
+                "year":       {"type": "integer", "description": "Exact issue year."},
+                "year_from":  {"type": "integer", "description": "Earliest issue year (inclusive)."},
+                "year_to":    {"type": "integer", "description": "Latest issue year (inclusive)."},
+                "office_contains":  {"type": "string", "description": "Filter by issuing office, e.g. 'drug', 'biologics', 'CDER'."},
+                "subject_contains": {"type": "string", "description": "Filter by subject text, e.g. 'data integrity', 'sterility'."},
+                "company_contains": {"type": "string", "description": "Filter by company name."},
+                "scope": {"type": "string", "enum": ["drug_biologics", "all"],
+                          "description": "drug_biologics (default) = drug + vaccine/biologics; 'all' = every FDA warning letter."},
+            },
+            "required": ["operation"],
+        },
+    },
+}
+
+def execute_stats(args, collection_ids=None):
+    op = args.get("operation", "count")
+    kw = {k: args[k] for k in ("year", "year_from", "year_to", "office_contains",
+                               "subject_contains", "company_contains", "scope")
+          if k in args and args[k] is not None}
+    if op == "count":
+        return f"{count_letters(**kw)} warning letters match."
+    if op == "by_year":
+        rows = letters_by_year(**kw)
+        return "\n".join(f"{y}: {c}" for y, c in rows) or "No matching letters."
+    if op == "top_companies":
+        rows = top_companies(**kw)
+        return "\n".join(f"{comp}: {c}" for comp, c in rows) or "No matching letters."
+    rows = list_letters(**kw)   # op == "list"
+    if not rows:
+        return "No matching warning letters."
+    return "\n".join(
+        f"{(d.isoformat() if d else '—')} | {comp} | {office} | {subj} | {url}"
+        for comp, office, d, subj, url in rows)
+
 def execute_search(args, collection_ids=None):
     query = args["query"]
     source = args.get("source")
@@ -157,11 +209,12 @@ def execute_fetch(args, collection_ids=None):
 
 # Map tool name -> executor, and the list of tool specs offered to the model.
 TOOL_DISPATCH = {
-    "search_documents": execute_search,
-    "list_documents":   execute_list,
-    "fetch_document":   execute_fetch,
+    "search_documents":     execute_search,
+    "list_documents":       execute_list,
+    "fetch_document":       execute_fetch,
+    "warning_letter_stats": execute_stats,
 }
-ALL_TOOLS = [SEARCH_TOOL, LIST_TOOL, FETCH_TOOL]
+ALL_TOOLS = [SEARCH_TOOL, LIST_TOOL, FETCH_TOOL, STATS_TOOL]
 
 def route_keyword(query):
     """Simple keyword-based routing baseline. Returns a list of agent names."""
@@ -231,10 +284,13 @@ def route(query, history=None):
 
 def run_agent_tools(agent_name, query, history=None, max_steps=5, collection_ids=None):
     sys_content = (AGENTS[agent_name] +
-        " You have three tools: search_documents (semantic search, optionally "
-        "filtered by source/doc_type), list_documents (discover what documents "
-        "exist), and fetch_document (read a whole document by title). Gather "
-        "evidence with these before answering; you may call them several times.")
+        " You have four tools: search_documents (semantic search of document "
+        "CONTENT, optionally filtered by source/doc_type), list_documents (discover "
+        "what documents exist), fetch_document (read a whole document by title), and "
+        "warning_letter_stats (COUNT / list / by-year / top-company queries over "
+        "warning-letter metadata). For quantitative questions — 'how many', date "
+        "ranges, trends, which companies — use warning_letter_stats, NOT semantic "
+        "search. Gather evidence before answering; you may call tools several times.")
     if collection_ids:
         sys_content += (" This project has the user's own UPLOADED documents attached. "
             "For EVERY question, run at least one search_documents WITHOUT a source "
